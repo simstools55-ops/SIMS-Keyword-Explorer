@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.3.3
+ * SIMS Keyword Explorer v0.3.4
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -26,7 +26,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.3.3';
+const SKE_VERSION = '0.3.4';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -603,7 +603,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.3.3',
+    contract_version:'0.3.4',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -724,7 +724,7 @@ function skeImportExternalDoctorResultPrompt(){
         google.script.run.withSuccessHandler(r=>{
           alert(
             '取り込み完了\\n'+
-            '処理候補: '+r.processed+'件（新規 '+r.imported+' / 既存更新 '+r.updated+'）\\n'+
+            '処理候補: '+r.processed+'件（新規 '+r.imported+' / 候補台帳更新 '+r.updated+'）\\n'+
             'Writer振替: '+r.writer+'件\\n'+
             'Doctor候補: '+r.doctor+'件\\n'+
             'Doctor見送り: '+r.rejected+'件\\n'+
@@ -813,6 +813,10 @@ function skeImportExternalDoctorResult(text){
     const conf=Number(c.confidence_pct||0);
     const gap=String(c.serp_gap||'UNKNOWN').toUpperCase();
 
+    if(existing==='VERIFIED_NO_STRONG_OWNER'){
+      relatedId='';
+    }
+
     const gapScore=
       (gap==='STRONG_GAP'||gap==='STRONG') ? 18 :
       (gap==='MODERATE_GAP'||gap==='MODERATE') ? 12 : 6;
@@ -826,7 +830,7 @@ function skeImportExternalDoctorResult(text){
 
     const candidateRow=[
       false,cid,siteId,siteName,q,'EXTERNAL_WEB',score,demand,life,existing,relatedId,
-      owned?String(owned.url||''):'',
+      (existing==='EXISTING_ARTICLE_FOUND'||existing==='POSSIBLE_OVERLAP') && owned ? String(owned.url||'') : '',
       decision,status,0,0,0,0,reason,'','','','','',new Date()
     ];
 
@@ -1084,7 +1088,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.3',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.4',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},

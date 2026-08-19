@@ -1,21 +1,16 @@
-# SIMS Keyword Explorer v0.3.3
+# SIMS Keyword Explorer v0.3.4
 
-## Critical fix: false cannibalization match
+## Purpose
+UI / record consistency patch after the first successful External Discovery roundtrip.
 
-The first External Discovery roundtrip mapped:
-- Candidate: LINEラボ 新機能 使い方
-to:
-- Existing article: Claude（クロード）の使い方・最新機能
-
-Cause:
-Generic intent words such as 「新機能」「使い方」 were counted as strong title overlap,
-even when the topic/entity 「LINEラボ」 did not match.
-
-## Fix
-- Added topic/entity anchor gate to Article Master ownership matching.
-- Generic intent tokens no longer establish ownership by themselves.
-- Existing article must match at least one non-generic topic anchor in title or main query.
-- GSC observed URL cannot override missing topic anchor for external new-topic ownership.
+## Fixes
+- When `既存記事判定 = VERIFIED_NO_STRONG_OWNER`:
+  - `関連ArticleID` is blank
+  - `関連URL` is blank
+- Import result wording changed:
+  - old: `既存更新`
+  - new: `候補台帳更新`
+  This avoids confusion with "update an existing article".
 
 ## Apps Script
 Replace:
@@ -25,11 +20,14 @@ Add:
 - none
 
 ## Retest
-Import the same Doctor External Discovery result again.
+Import the same LINE Lab Doctor result again.
 
-Expected for LINEラボ:
-- It must NOT map to the Claude article.
-- If no LINEラボ/LINE Lab owner exists in Article Master:
-  - Doctor candidate: 1
-  - Writer redirect: 0
-- Doctor rejected/deprioritized: 2
+Expected:
+- 処理候補: 1件（新規 0 / 候補台帳更新 1）
+- Writer振替: 0件
+- Doctor候補: 1件
+- Doctor見送り: 2件
+- LINEラボ row:
+  - 既存記事判定 = VERIFIED_NO_STRONG_OWNER
+  - 関連ArticleID = blank
+  - 関連URL = blank
