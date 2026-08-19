@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.3.2
+ * SIMS Keyword Explorer v0.3.3
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -26,7 +26,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.3.2';
+const SKE_VERSION = '0.3.3';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -452,14 +452,39 @@ function skeOwnedQueryAssessment_(query, urls, articleRows){
   articleRows.forEach(r=>{
     const url=skeNormalizeUrl_(skeObj_(r,['記事URL','URL','url'])||'');
     if(!url)return;
+
     const title=String(skeObj_(r,['記事タイトル','H1タイトル','タイトル','title'])||'');
     const mq=String(skeObj_(r,['メインクエリ','Main Query','main_query'])||'');
     const intent=String(skeObj_(r,['SearchIntent','検索意図'])||'');
     const aid=String(skeObj_(r,['ArticleID','記事ID','article_id'])||skeArticleIdFromUrl_(url));
-    let sim=Math.max(skeQuerySimilarity_(query,mq),skeTitleQueryCoverage_(title,query),skeQuerySimilarity_(query,intent));
+
     const observed=(urls||[]).some(u=>skeNormalizeUrl_(u.url)===url);
-    if(observed)sim=Math.max(sim,.58);
-    if(!best||sim>best.score)best={score:sim,url:url,articleId:aid,title:title,mainQuery:mq,observed:observed};
+
+    // For Article Master semantic ownership, require the candidate's topic/entity
+    // to appear in title or main query. Generic words alone cannot create ownership.
+    const anchorMatch=
+      skeHasTopicAnchorMatch_(query,title) ||
+      skeHasTopicAnchorMatch_(query,mq);
+
+    let sim=0;
+    if(anchorMatch){
+      sim=Math.max(
+        skeQuerySimilarity_(query,mq),
+        skeTitleQueryCoverage_(title,query),
+        skeQuerySimilarity_(query,intent)
+      );
+    }
+
+    // GSC-observed URL is useful evidence, but without a topic anchor it is not
+    // enough to call an Article Master row the owner of a new external topic.
+    if(observed && anchorMatch)sim=Math.max(sim,.58);
+
+    if(!best||sim>best.score){
+      best={
+        score:sim,url:url,articleId:aid,title:title,mainQuery:mq,
+        observed:observed,anchorMatch:anchorMatch
+      };
+    }
   });
   return best;
 }
@@ -578,7 +603,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.3.2',
+    contract_version:'0.3.3',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -779,7 +804,7 @@ function skeImportExternalDoctorResult(text){
         relatedId=owned.articleId||'';
       }
       doctor++;
-      reason+=' / SKE判定: 外部変化候補。最終的な記事化可否はDoctor精密判定へ。';
+      reason+=' / SKE判定: 外部変化候補。Article Masterでテーマ本体の強い既存担当は確認されず、最終的な記事化可否はDoctor精密判定へ。';
     }
 
     const demand=String(c.demand_maturity||'PREDICTED').toUpperCase();
@@ -1059,7 +1084,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.2',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.3',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -1275,10 +1300,75 @@ function skeFormatCandidates_(){
   });
 }
 
-function skeNormalizeQuery_(q){return String(q||'').toLowerCase().replace(/[　\s]+/g,' ').replace(/[｜|／/・,，。!！?？:：;；()[\]【】「」『』]/g,' ').replace(/\s+/g,' ').trim();}
-function skeQueryTokens_(q){return skeNormalizeQuery_(q).split(' ').map(x=>x.trim()).filter(x=>x&&x.length>=2).filter(x=>!/^(202[0-9]|20[0-9]{2}|最新版|最新|完全版|方法|やり方)$/.test(x));}
-function skeQuerySimilarity_(a,b){const na=skeNormalizeQuery_(a),nb=skeNormalizeQuery_(b);if(!na||!nb)return 0;if(na===nb)return 1;if(na.indexOf(nb)>=0||nb.indexOf(na)>=0)return .85;const ta=skeQueryTokens_(na),tb=skeQueryTokens_(nb);if(!ta.length||!tb.length)return 0;const sa={};ta.forEach(x=>sa[x]=1);let common=0;tb.forEach(x=>{if(sa[x])common++});const union={};ta.concat(tb).forEach(x=>union[x]=1);return common/Math.max(Object.keys(union).length,1);}
-function skeTitleQueryCoverage_(title,q){const nt=skeNormalizeQuery_(title),nq=skeNormalizeQuery_(q);if(!nt||!nq)return 0;if(nt.indexOf(nq)>=0)return 1;const terms=skeQueryTokens_(nq);if(!terms.length)return 0;let hit=0;terms.forEach(t=>{if(nt.indexOf(t)>=0)hit++});return hit/terms.length;}
+function skeNormalizeQuery_(q){
+  return String(q||'').toLowerCase()
+    .normalize('NFKC')
+    .replace(/[　\s]+/g,' ')
+    .replace(/[｜|／/・,，。!！?？:：;；()[\]【】「」『』]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function skeGenericIntentToken_(t){
+  const x=String(t||'').toLowerCase();
+  return /^(202[0-9]|20[0-9]{2}|最新版|最新|完全版|方法|やり方|使い方|手順|設定|解除|変更|新機能|機能|原因|対処|対処法|直し方|意味|とは|できない|エラー|不具合|確認|おすすめ|戻す|追加|表示|使う|やる)$/.test(x);
+}
+
+function skeQueryTokens_(q){
+  return skeNormalizeQuery_(q).split(' ')
+    .map(x=>x.trim())
+    .filter(x=>x&&x.length>=2)
+    .filter(x=>!skeGenericIntentToken_(x));
+}
+
+function skeAnchorTokens_(q){
+  // Topic/entity anchors only. Generic intent words must never establish ownership.
+  return skeQueryTokens_(q).filter(x=>{
+    if(skeGenericIntentToken_(x))return false;
+    // Avoid numeric-only / year-only anchors.
+    if(/^\d+$/.test(x))return false;
+    return true;
+  });
+}
+
+function skeHasTopicAnchorMatch_(query,text){
+  const anchors=skeAnchorTokens_(query);
+  const nt=skeNormalizeQuery_(text);
+  if(!anchors.length)return false;
+  return anchors.some(a=>nt.indexOf(a)>=0);
+}
+
+function skeQuerySimilarity_(a,b){
+  const na=skeNormalizeQuery_(a),nb=skeNormalizeQuery_(b);
+  if(!na||!nb)return 0;
+  if(na===nb)return 1;
+  if(na.indexOf(nb)>=0||nb.indexOf(na)>=0)return .85;
+
+  const ta=skeQueryTokens_(na),tb=skeQueryTokens_(nb);
+  if(!ta.length||!tb.length)return 0;
+  const sa={};ta.forEach(x=>sa[x]=1);
+  let common=0;tb.forEach(x=>{if(sa[x])common++});
+  const union={};ta.concat(tb).forEach(x=>union[x]=1);
+  return common/Math.max(Object.keys(union).length,1);
+}
+
+function skeTitleQueryCoverage_(title,q){
+  const nt=skeNormalizeQuery_(title),nq=skeNormalizeQuery_(q);
+  if(!nt||!nq)return 0;
+  if(nt.indexOf(nq)>=0)return 1;
+
+  const terms=skeQueryTokens_(nq);
+  if(!terms.length)return 0;
+
+  // Critical gate: at least one topic/entity anchor must be present.
+  // Example: "LINEラボ 新機能 使い方" must not match a Claude article
+  // merely because both contain "新機能" and "使い方".
+  if(!skeHasTopicAnchorMatch_(q,title))return 0;
+
+  let hit=0;
+  terms.forEach(t=>{if(nt.indexOf(t)>=0)hit++});
+  return hit/terms.length;
+}
 function skeNormalizeUrl_(u){return String(u||'').trim().replace(/[?#].*$/,'').replace(/\/$/,'');}
 function skeSiteNameFromUrl_(u){try{return new URL(String(u)).hostname.replace(/^www\./,'');}catch(e){return '';}}
 function skeSiteIdFromUrl_(u){const s=String(u||'').toLowerCase().replace(/^https?:\/\//,'').replace(/^sc-domain:/,'').replace(/^www\./,'').split('/')[0].replace(/[^a-z0-9.-]+/g,'-');return s||'site';}

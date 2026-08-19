@@ -1,30 +1,21 @@
-# SIMS Keyword Explorer v0.3.2
+# SIMS Keyword Explorer v0.3.3
+
+## Critical fix: false cannibalization match
+
+The first External Discovery roundtrip mapped:
+- Candidate: LINEラボ 新機能 使い方
+to:
+- Existing article: Claude（クロード）の使い方・最新機能
+
+Cause:
+Generic intent words such as 「新機能」「使い方」 were counted as strong title overlap,
+even when the topic/entity 「LINEラボ」 did not match.
 
 ## Fix
-v0.3.1 Doctor external result import could show:
-- 外部候補 0
-- Writer振替 0
-- Doctor候補 0
-
-when the same Candidate ID already existed in Candidate Registry.
-
-The previous code silently skipped duplicate Candidate IDs.
-
-## v0.3.2 behavior
-- New candidate -> add
-- Existing same Candidate ID -> update in place
-- Preserve progress fields:
-  - selection
-  - Doctor final verdict/confidence
-  - recheck date
-  - published ArticleID / URL
-- Show new vs updated counts
-- Show Doctor rejected/deprioritized count
-- Mark external themes:
-  - DOCTOR_IMPORTED
-  - DOCTOR_REJECTED
-- Accept SERP gap values MODERATE / STRONG in addition to MODERATE_GAP / STRONG_GAP
-- Never silently return an unexplained all-zero result when Doctor actually supplied a candidate
+- Added topic/entity anchor gate to Article Master ownership matching.
+- Generic intent tokens no longer establish ownership by themselves.
+- Existing article must match at least one non-generic topic anchor in title or main query.
+- GSC observed URL cannot override missing topic anchor for external new-topic ownership.
 
 ## Apps Script
 Replace:
@@ -34,8 +25,11 @@ Add:
 - none
 
 ## Retest
-Paste the same Doctor external discovery result again.
-Expected for the current LINE Lab case:
-- Processed candidates: 1
-- Doctor rejected: 2
-- Candidate is either newly added or existing-updated
+Import the same Doctor External Discovery result again.
+
+Expected for LINEラボ:
+- It must NOT map to the Claude article.
+- If no LINEラボ/LINE Lab owner exists in Article Master:
+  - Doctor candidate: 1
+  - Writer redirect: 0
+- Doctor rejected/deprioritized: 2
