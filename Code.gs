@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.2.0
+ * SIMS Keyword Explorer v0.2.1
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -19,7 +19,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.2.0';
+const SKE_VERSION = '0.2.1';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -284,36 +284,53 @@ function skeBuildPersonaProfile_(qRows){
   // up in a generic "意味" bucket.
 
   const targetDefs=[
-    {key:'GEN_AI', label:'生成AI', re:/chat ?gpt|chatgpt|gemini|claude|copilot|openai|生成ai|人工知能/i,
+    // Order matters: named services/products before broad platform categories.
+    {key:'GEN_AI', label:'生成AI', re:/chat\s?gpt|chatgpt|gemini|claude|copilot|openai|生成ai|人工知能|something went wrong and (?:the content|an ai response) wasn'?t generated/i,
      explore:'生成AIの新エラー、仕様変更、モデル変更、新機能、障害'},
-    {key:'VIDEO_SNS', label:'動画・SNS', re:/youtube|line|instagram|インスタ|tiktok|twitter|x.com|facebook|threads/i,
+    {key:'MICROSOFT_SERVICE', label:'Microsoftサービス', re:/\bteams\b|チームス|microsoft\s?teams|outlook|onedrive|excel|エクセル|word|ワード|powerpoint/i,
+     explore:'Microsoftサービスの障害、UI変更、制限変更、新機能、設定変更'},
+    {key:'VIDEO_SNS', label:'動画・SNS', re:/youtube|ユーチューブ|\bline\b|ライン|instagram|インスタ|tiktok|twitter|ツイッター|\bx\b\s*(?:ポスト|制限)|facebook|threads/i,
      explore:'SNS/動画サービスのUI変更、新設定、新不具合、機能廃止'},
-    {key:'APPLE', label:'Apple', re:/iphone|ipad|apple ?watch|macbook|macos|\bmac\b|ios|watchos|icloud|airpods|vo2max/i,
+    {key:'APPLE', label:'Apple', re:/iphone|ipad|apple\s?watch|アップルウォッチ|macbook|macos|\bmac\b|ios|watchos|icloud|airpods|vo2max|safari/i,
      explore:'iOS/macOS/watchOS新機能、設定変更、同期問題、仕様変更'},
-    {key:'ANDROID', label:'Android', re:/android|pixel|galaxy|quick ?share|google ?play|safetycore/i,
+    {key:'ANDROID', label:'Android', re:/android|pixel|galaxy|quick\s?share|google\s?play|safetycore|aquos/i,
      explore:'Android/Pixel新機能、OS更新後の不具合、Google公式修正情報'},
-    {key:'WINDOWS', label:'Windows', re:/windows ?1[01]|windows|win ?1[01]|defender|edge|office|microsoft 365|25h2|24h2/i,
+    {key:'WINDOWS', label:'Windows', re:/windows\s?1[01]|windows|win\s?1[01]|defender|edge|25h2|24h2|タスクバー|スタートメニュー|クイックアクセス/i,
      explore:'Windows Update、新機能、廃止機能、仕様変更、不具合、エラーメッセージ'},
-    {key:'PC_DEVICE', label:'PC・周辺機器', re:/\bpc\b|パソコン|bios|uefi|hdd|ssd|usb|ルーター|wi-?fi|ネットワーク|モニター|プリンター/i,
+    {key:'BIOS', label:'BIOS・UEFI', re:/american\s+megatrends|\bami\s+bios\b|\bbios\b|\buefi\b/i,
+     explore:'BIOS/UEFIの更新、設定変更、起動トラブル、メーカー仕様変更'},
+    {key:'NETWORK', label:'ネットワーク', re:/\bdns\b|\bdhcp\b|wi-?fi|wifi|ルーター|vpn|ネットワーク|テザリング/i,
+     explore:'ネットワーク障害、DNS/DHCP/VPN/Wi-Fiの新しい不具合・仕様変更'},
+    {key:'PC_DEVICE', label:'PC・周辺機器', re:/\bpc\b|パソコン|hdd|ssd|usb|モニター|プリンター|外付け|ハードディスク|bluescreenview/i,
      explore:'PC/周辺機器の新規格、設定変更、互換性問題、新しいトラブル'},
-    {key:'IT_GENERAL', label:'IT一般', re:/トラッカー|クラウド|アカウント|ブラウザ|サーバー|ネットワーク機器/i,
+    {key:'GOOGLE_SERVICE', label:'Googleサービス', re:/\bchrome\b|google\s+翻訳|google\s+背景|google\s+フォント|gmail/i,
+     explore:'GoogleサービスのUI変更、新機能、障害、仕様変更'},
+    {key:'CREATIVE_APP', label:'制作・業務アプリ', re:/davinci\s+resolve|capcut|calibre|evernote|firefox/i,
+     explore:'制作・業務アプリの新バージョン、UI変更、制限変更、移行トラブル'},
+    {key:'IT_GENERAL', label:'IT一般', re:/トラッカー|クラウド|アカウント|ブラウザ|サーバー|nw機器|コード\s*インタープリター/i,
      explore:'新しいPC/IT用語、新規格、新サービス、新機能の初心者向け解説'}
   ];
-
   const intentDefs=[
-    {key:'ERROR', label:'エラー・不具合解決', re:/something went wrong|error|エラー|不具合|失敗|できない|開かない|表示されない|反応しない|消えた|消え|戻らない|生成されない/i},
-    {key:'SETTING', label:'設定変更・解除', re:/設定|解除|オフ|オン|戻す|元に戻す|変更|増やす|パスワード|自動再生/i},
-    {key:'UPDATE', label:'更新・導入', re:/アップデート|update|ダウンロード|インストール|25h2|24h2|移行|機種変更/i},
-    {key:'HOWTO', label:'使い方・操作', re:/使い方|やり方|方法|手順|追加|共有|見る方法|再生/i},
+    {key:'ERROR', label:'エラー・不具合解決', re:/something went wrong|error|エラー|不具合|失敗|できない|開かない|表示されない|反応しない|消えた|消え|戻らない|生成されない|応答できません|応答が未完了|時間がかかっています|見つかりません|使えません|到達できません|終わらない|真っ暗|暗い|くるくる|ぐるぐる/i},
+    {key:'OUTAGE', label:'障害・稼働状況確認', re:/障害情報|障害\s*(?:今日|リアルタイム)?|リアルタイム|落ちてる|ダウンしてる/i},
+    {key:'LIMIT', label:'制限・容量確認', re:/制限|容量制限|上限|回数制限|添付ファイル制限/i},
+    {key:'SETTING', label:'設定変更・解除', re:/設定|解除|オフ|オン|戻す|元に戻す|変更|増やす|パスワード|自動再生|ダークモード|非表示|位置|縦/i},
+    {key:'UPDATE', label:'更新・導入', re:/アップデート|update|ダウンロード|インストール|25h2|24h2|移行|機種変更|iso/i},
+    {key:'HOWTO', label:'使い方・操作', re:/使い方|やり方|方法|手順|追加|共有|見る方法|再生|編集|クリア/i},
     {key:'SYNC', label:'同期・接続', re:/同期|接続|つながらない|繋がらない|認識しない|ペアリング/i},
-    {key:'MEANING', label:'意味・仕組み理解', re:/とは|意味|違い|仕組み|種類|役割|読み方/i},
+    {key:'MEANING', label:'意味・仕組み理解', re:/とは|意味|違い|仕組み|種類|役割|読み方|必要\s*か|大丈夫/i},
     {key:'CHANGE', label:'仕様変更・新機能確認', re:/変わった|なくなった|廃止|新機能|仕様変更|対応機種|いつから/i}
   ];
 
   const pickTarget=q=>{
-    // Specific named services/products take priority over generic PC terms.
-    for(const d of targetDefs){ if(d.re.test(q)) return d; }
-    return {key:'OTHER',label:'OTHER / 未分類',explore:'未分類クエリを確認し、新しい対象カテゴリ候補を発見する'};
+    const s=String(q||'').normalize('NFKC');
+    for(const d of targetDefs){ if(d.re.test(s)) return d; }
+
+    // Distinguish dictionary shortage from genuinely unknown topics.
+    const techHint=/設定|解除|アップデート|ダウンロード|インストール|エラー|障害|キャッシュ|データ移行|ダークモード|ホーム画面|ストレージ|フォント|音声入力|省データモード|自動再生|ログイン|共有|同期|サーバー|ファイル|アプリ/i.test(s);
+    return techHint
+      ? {key:'DICT_GAP',label:'辞書不足候補',explore:'対象名辞書を追加すべき既知ITテーマ。代表クエリを確認して分類辞書へ昇格する'}
+      : {key:'UNKNOWN',label:'未知テーマ',explore:'既存分類にない新しい検索対象。外部探索テーマ候補として内容を確認する'};
   };
   const pickIntent=q=>{
     // Error/problem intent has priority; "意味" in an AI error query remains AI × meaning,
@@ -351,7 +368,7 @@ function skeBuildPersonaProfile_(qRows){
         .sort((a,b)=>b.imp-a.imp)
         .slice(0,10).map(y=>y.q).join(' / ');
       const audience=x.target+' × '+x.intent;
-      const theme=(x.target.indexOf('OTHER')>=0 || x.intent.indexOf('OTHER')>=0)
+      const theme=(x.target.indexOf('辞書不足')>=0 || x.target.indexOf('未知')>=0 || x.intent.indexOf('OTHER')>=0)
         ? 'OTHER分析対象：代表クエリから新しい分類ルールまたは探索テーマを発見する'
         : x.explore+'。特に「'+x.intent+'」需要を優先探索する';
       return [i+1,audience,x.target,x.intent,reps,x.impressions,x.clicks,totalImp?x.impressions/totalImp:0,theme];
@@ -375,6 +392,10 @@ function skeBuildPersonaProfile_(qRows){
   sh.setColumnWidth(1,55);sh.setColumnWidth(2,240);sh.setColumnWidth(3,140);sh.setColumnWidth(4,180);
   sh.setColumnWidth(5,520);sh.setColumnWidth(6,100);sh.setColumnWidth(7,90);sh.setColumnWidth(8,90);sh.setColumnWidth(9,460);
 
+  const dictGapImp=Object.values(stats).filter(x=>x.target==='辞書不足候補').reduce((s,x)=>s+x.impressions,0);
+  const unknownImp=Object.values(stats).filter(x=>x.target==='未知テーマ').reduce((s,x)=>s+x.impressions,0);
+  skeSetSetting_('audienceDictGapImpressions',String(dictGapImp));
+  skeSetSetting_('audienceUnknownImpressions',String(unknownImp));
   skeSetSetting_('audienceProfileGroups',String(rows.length));
   skeSetSetting_('audienceProfileTotalImpressions',String(totalImp));
   skeSetSetting_('audienceProfileTotalClicks',String(totalClicks));
@@ -539,7 +560,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.2.0',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.2.1',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
