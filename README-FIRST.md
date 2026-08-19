@@ -1,13 +1,40 @@
-# SIMS Keyword Explorer v0.2.3
+# SIMS Keyword Explorer v0.3.0
 
-## Purpose
-v0.2.2 Search Audience classification final patch before External Discovery.
+## Major feature: External Discovery
 
-## Fixes
-- Prevent Japanese パスワード from matching Microsoft Word (ワード).
-- Explicit Windows context now wins unless a real Microsoft app name is present.
-- Normalize ChatGPT error variants: wasn't / wasn’t / wasn t.
-- Recognize common Claude slow/incomplete-response Japanese error text as Generative AI.
+Search Audience Profileを使い、
+「このブログに来る検索者が次に困りそうな新しい外部変化」を
+SIMS DoctorのWeb検索へ渡すルートを実装しました。
+
+## Main workflow
+1. 初期設定
+2. Evidenceを読み込む
+3. 検索オーディエンスを分析する
+4. 外部探索テーマを作る
+5. 外部探索Packageを作る
+6. Doctor外部探索結果を取り込む
+7. 候補を確認する
+8. 処置を進める
+
+## External Discovery Package
+Example:
+SKE-ガジェット探検記-外部探索-YYYYMMDD-HHmm.zip
+
+Contents:
+- external_discovery_request.json
+- search_audience_profile.csv
+- article_master.csv (when available)
+- README-FIRST.md
+
+## Doctor result import
+Doctorの回答全文またはJSONを貼り付け可能。
+Required format:
+SIMS_DOCTOR_EXTERNAL_DISCOVERY_RESULT_V1
+
+SKE側でArticle Masterと照合し、
+- existing owner strong -> WRITER_REDIRECT
+- no strong owner -> DOCTOR_REVIEW
+へ振り分けます。
 
 ## Apps Script
 Replace:
@@ -16,8 +43,6 @@ Replace:
 Add:
 - none
 
-## Verification
-Run "3. 検索オーディエンスを分析する" and confirm:
-- Windows password/ZIP password queries are not classified as Microsoftサービス.
-- BIOS is not classified as Apple.
-- ChatGPT/Claude error variants are mostly under 生成AI.
+New spreadsheet sheets are created automatically:
+- 外部探索
+- _SKE_EXTERNAL_RESULTS
