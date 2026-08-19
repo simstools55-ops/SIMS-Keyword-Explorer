@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.1.3
+ * SIMS Keyword Explorer v0.1.4
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -7,7 +7,9 @@
  * - Analyze page/query evidence
  * - Optional Article Master matching
  * - Cluster query intent before Candidate Registry
- * - Candidate Gate: max 10 practical candidates / max 3 Doctor candidates
+ * - Search Persona Profile from aggregated GSC query behavior
+ * - OWNED_QUERY exclusion + novelty gate
+ * - Candidate Gate: max 10 internal Blue Ocean candidates
  * - Build Candidate Registry
  * - Generate Doctor referral ZIPs with user-recognizable names
  *
@@ -17,7 +19,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.1.3';
+const SKE_VERSION = '0.1.4';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -28,7 +30,8 @@ const SKE_CONFIG = {
     pageWeekly: '_SKE_EVIDENCE_PAGE_WEEKLY',
     pageQuery: '_SKE_EVIDENCE_PAGE_QUERY',
     querySummary: '_SKE_EVIDENCE_QUERY_SUMMARY',
-    articleMaster: '_SKE_ARTICLE_MASTER'
+    articleMaster: '_SKE_ARTICLE_MASTER',
+    persona: '検索ペルソナ'
   },
   candidateHeaders: [
     '選択','Candidate ID','SiteID','ブログ','Primary Query','Discovery Type',
@@ -54,8 +57,9 @@ function skeBuildMenu_() {
     .addItem('1. 初期設定 / 対象ブログを準備', 'skeInitialSetup')
     .addItem('2. Evidenceを読み込む', 'skeImportEvidencePrompt')
     .addItem('3. 新しいキーワード候補を探す', 'skeRunInternalDiscovery')
-    .addItem('4. 候補を確認する', 'skeOpenCandidates')
-    .addItem('5. 処置を進める', 'skeContinueWorkflow')
+    .addItem('4. 検索ペルソナを確認する', 'skeOpenPersonaProfile')
+    .addItem('5. 候補を確認する', 'skeOpenCandidates')
+    .addItem('6. 処置を進める', 'skeContinueWorkflow')
     .addSeparator()
     .addSubMenu(ui.createMenu('追加の操作')
       .addItem('Article Masterの使い方', 'skeArticleMasterHelp')
@@ -95,6 +99,7 @@ function skeSetup_() {
   ensure(SKE_CONFIG.sheets.pageQuery, null, true);
   ensure(SKE_CONFIG.sheets.querySummary, null, true);
   ensure(SKE_CONFIG.sheets.articleMaster, ['ArticleID','記事タイトル','記事URL','メインクエリ','SearchIntent','状態'], true);
+  ensure(SKE_CONFIG.sheets.persona, ['順位','検索ペルソナ','主な対象','主な困りごと','代表クエリ','表示回数','クリック','構成比','外部探索テーマ'], false);
   skeSetSetting_('version', SKE_VERSION);
   skeRenderHome();
 }
@@ -247,6 +252,123 @@ function skeImportEvidenceById_(fileId) {
   return {siteName,siteUrl,siteId,fileName:name,queryRows:Math.max(0,skeSheet_(SKE_CONFIG.sheets.pageQuery).getLastRow()-1)};
 }
 
+
+function skeOpenPersonaProfile(){
+  const sh=skeSheet_(SKE_CONFIG.sheets.persona);
+  SpreadsheetApp.getActive().setActiveSheet(sh);
+}
+
+function skeBuildPersonaProfile_(qRows){
+  const defs=[
+    {name:'Windows困りごと層', target:'Windows / PC', problem:'設定・エラー・できない・戻らない', re:/\bwindows\b|windows ?1[01]|win ?1[01]|pc\b|パソコン|defender|office|edge/i,
+     intent:/できない|エラー|error|消え|戻ら|反応しない|開かない|解除|設定|不具合|トラブル/i,
+     explore:'Windows Update、新機能、廃止機能、仕様変更、不具合、エラーメッセージ'},
+    {name:'Apple設定・トラブル層', target:'iPhone / Apple Watch / Mac', problem:'同期・設定・使い方・不具合', re:/iphone|ipad|apple ?watch|mac(book|os)?|ios|watchos|icloud|airpods/i,
+     intent:/できない|同期|設定|使い方|方法|消え|反応|エラー|解除|変更/i,
+     explore:'iOS/macOS/watchOS新機能、設定変更、同期問題、仕様変更'},
+    {name:'Androidトラブル層', target:'Android / Pixel / Galaxy', problem:'アップデート後・表示・設定・不具合', re:/android|pixel|galaxy|quick ?share|google ?play/i,
+     intent:/できない|消え|表示されない|追加できない|反応しない|設定|アップデート|不具合|エラー/i,
+     explore:'Android/Pixel新機能、OS更新後の不具合、Google公式修正情報'},
+    {name:'生成AIトラブル層', target:'ChatGPT / Gemini / Claude等', problem:'生成失敗・エラー・使い方', re:/chat ?gpt|chatgpt|gemini|claude|copilot|ai\b|openai/i,
+     intent:/error|エラー|something went wrong|できない|生成|使い方|意味|直し方|反応/i,
+     explore:'生成AIの新エラー、仕様変更、モデル変更、新機能、障害'},
+    {name:'動画・SNS設定層', target:'YouTube / LINE / Instagram等', problem:'再生・通知・表示・設定', re:/youtube|line|instagram|インスタ|tiktok|x twitter|twitter|facebook/i,
+     intent:/できない|設定|解除|オフ|消え|通知|再生|開かない|反応/i,
+     explore:'SNS/動画サービスのUI変更、新設定、新不具合、機能廃止'},
+    {name:'PC・IT用語調査層', target:'PC / IT一般', problem:'意味・違い・仕組みを知りたい', re:/とは|意味|違い|仕組み|種類|役割|読み方/i,
+     intent:/とは|意味|違い|仕組み|種類|役割|読み方/i,
+     explore:'新しいPC/IT用語、新規格、新サービス、新機能の初心者向け解説'}
+  ];
+
+  const stats={};
+  defs.forEach(d=>stats[d.name]={def:d,impressions:0,clicks:0,queries:{}});
+  let totalImp=0;
+
+  qRows.forEach(r=>{
+    const q=String(skeObj_(r,['query','クエリ'])||'').trim();
+    if(!q)return;
+    const imp=Number(skeObj_(r,['impressions','表示回数'])||0);
+    const clk=Number(skeObj_(r,['clicks','クリック数'])||0);
+    totalImp+=imp;
+
+    let best=null,score=-1;
+    defs.forEach(d=>{
+      let s=0;
+      if(d.re.test(q))s+=2;
+      if(d.intent.test(q))s+=1;
+      if(s>score){score=s;best=d;}
+    });
+    if(!best || score<=0)return;
+    const st=stats[best.name];
+    st.impressions+=imp;st.clicks+=clk;
+    const nq=skeNormalizeQuery_(q);
+    const x=st.queries[nq]||(st.queries[nq]={q:q,imp:0});
+    x.imp+=imp;
+  });
+
+  const rows=Object.values(stats)
+    .filter(x=>x.impressions>0)
+    .sort((a,b)=>b.impressions-a.impressions)
+    .slice(0,8)
+    .map((x,i)=>{
+      const reps=Object.values(x.queries).sort((a,b)=>b.imp-a.imp).slice(0,5).map(y=>y.q).join(' / ');
+      return [i+1,x.def.name,x.def.target,x.def.problem,reps,x.impressions,x.clicks,totalImp?x.impressions/totalImp:0,x.def.explore];
+    });
+
+  const sh=skeSheet_(SKE_CONFIG.sheets.persona);
+  sh.clearContents();
+  sh.getRange(1,1,1,9).setValues([['順位','検索ペルソナ','主な対象','主な困りごと','代表クエリ','表示回数','クリック','構成比','外部探索テーマ']]);
+  if(rows.length)sh.getRange(2,1,rows.length,9).setValues(rows);
+  sh.setFrozenRows(1);
+  sh.getRange(1,1,1,9).setFontWeight('bold').setWrap(true);
+  if(rows.length){
+    sh.getRange(2,8,rows.length,1).setNumberFormat('0.0%');
+    sh.getRange(2,1,rows.length,9).setVerticalAlignment('top');
+    [2,3,4,5,9].forEach(c=>sh.getRange(2,c,rows.length,1).setWrap(true));
+  }
+  sh.setColumnWidth(1,55);sh.setColumnWidth(2,180);sh.setColumnWidth(3,190);sh.setColumnWidth(4,220);
+  sh.setColumnWidth(5,430);sh.setColumnWidth(6,100);sh.setColumnWidth(7,90);sh.setColumnWidth(8,90);sh.setColumnWidth(9,420);
+  return rows;
+}
+
+function skeArticleMasterRequired_(){
+  const rows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster);
+  if(!rows.length){
+    throw new Error('v0.1.4では新記事候補のカニバリ防止のためArticle Masterが必須です。追加の操作 → Article Masterの使い方 から記事一覧を登録してください。');
+  }
+  return rows;
+}
+
+function skeOwnedQueryAssessment_(query, urls, articleRows){
+  let best=null;
+  articleRows.forEach(r=>{
+    const url=skeNormalizeUrl_(skeObj_(r,['記事URL','URL','url'])||'');
+    if(!url)return;
+    const title=String(skeObj_(r,['記事タイトル','タイトル','title'])||'');
+    const mq=String(skeObj_(r,['メインクエリ','Main Query','main_query'])||'');
+    const intent=String(skeObj_(r,['SearchIntent','検索意図'])||'');
+    const aid=String(skeObj_(r,['ArticleID','記事ID','article_id'])||'');
+    let sim=Math.max(skeQuerySimilarity_(query,mq),skeTitleQueryCoverage_(title,query),skeQuerySimilarity_(query,intent));
+    const observed=(urls||[]).some(u=>skeNormalizeUrl_(u.url)===url);
+    if(observed)sim=Math.max(sim,.58);
+    if(!best||sim>best.score)best={score:sim,url:url,articleId:aid,title:title,mainQuery:mq,observed:observed};
+  });
+  return best;
+}
+
+function skeNoveltySignal_(query, impressions, urlCount, owned){
+  const q=skeNormalizeQuery_(query);
+  const modifiers=/できない|消えた|消え|なくなった|追加できない|反応しない|エラー|error|変更|終了|廃止|アップデート後|新機能|代わり|直し方|未対応|対応機種|原因|なぜ/i;
+  const hasModifier=modifiers.test(q);
+  const unowned=!owned || owned.score<.42;
+  const weakOwnership=owned && owned.score>=.42 && owned.score<.62;
+  let type='NONE',score=0;
+  if(unowned&&hasModifier){type='UNOWNED_INTENT_NEW_MODIFIER';score=2;}
+  else if(unowned){type='UNOWNED_INTENT';score=1;}
+  else if(weakOwnership&&hasModifier){type='INTENT_DRIFT';score=1;}
+  return {type:type,score:score};
+}
+
 function skeRunInternalDiscovery() {
   skeSetup_();
   const siteId=skeGetSetting_('siteId');
@@ -255,281 +377,94 @@ function skeRunInternalDiscovery() {
   const qRows=skeReadObjects_(SKE_CONFIG.sheets.pageQuery);
   if(!qRows.length) throw new Error('page_query_top Evidenceがありません。');
 
-  const articleRows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster);
-  const rawGroups={};
+  const articleRows=skeArticleMasterRequired_();
+  const personaRows=skeBuildPersonaProfile_(qRows);
 
-  // 1) Query単位にEvidenceを集約
+  const grouped={};
   qRows.forEach(r=>{
     const q=String(skeObj_(r,['query','クエリ'])||'').trim();
     const nq=skeNormalizeQuery_(q);
     const url=skeNormalizeUrl_(skeObj_(r,['page','url','URL'])||'');
-    if(!q||!nq||!url) return;
-
-    const g=rawGroups[nq]||(rawGroups[nq]={
-      query:q, normalized:nq, urls:{}, clicks:0, impressions:0, posNum:0, posDen:0
-    });
+    if(!q||!nq||!url)return;
+    const g=grouped[nq]||(grouped[nq]={query:q,urls:{},clicks:0,impressions:0,posNum:0,posDen:0});
     const imp=Number(skeObj_(r,['impressions','表示回数'])||0);
     const clk=Number(skeObj_(r,['clicks','クリック数'])||0);
     const pos=Number(skeObj_(r,['position','掲載順位','平均掲載順位'])||0);
-
-    g.clicks+=clk;
-    g.impressions+=imp;
-    if(pos>0&&imp>0){ g.posNum+=pos*imp; g.posDen+=imp; }
-
+    g.clicks+=clk;g.impressions+=imp;
+    if(pos>0&&imp>0){g.posNum+=pos*imp;g.posDen+=imp;}
     const u=g.urls[url]||(g.urls[url]={url:url,impressions:0,clicks:0,posNum:0,posDen:0});
-    u.impressions+=imp;
-    u.clicks+=clk;
-    if(pos>0&&imp>0){ u.posNum+=pos*imp; u.posDen+=imp; }
+    u.impressions+=imp;u.clicks+=clk;
+    if(pos>0&&imp>0){u.posNum+=pos*imp;u.posDen+=imp;}
   });
 
-  const raw=Object.values(rawGroups)
-    .filter(g=>g.impressions>=3)
-    .sort((a,b)=>b.impressions-a.impressions);
+  const all=Object.values(grouped).filter(g=>g.impressions>=3).sort((a,b)=>b.impressions-a.impressions);
+  const maxImp=Math.max(1,...all.map(x=>x.impressions));
+  const candidates=[];
+  let ownedExcluded=0, noNoveltyExcluded=0;
 
-  // 2) 同一検索意図を先にCluster化
-  const clusters=[];
-  raw.forEach(g=>{
-    let best=null, bestSim=0;
-    for(let i=0;i<clusters.length;i++){
-      const sim=skeClusterSimilarity_(g.query,clusters[i].primaryQuery);
-      if(sim>bestSim){ bestSim=sim; best=clusters[i]; }
-    }
-    if(best && bestSim>=0.72){
-      best.members.push(g);
-      best.impressions+=g.impressions;
-      best.clicks+=g.clicks;
-      best.posNum+=g.posNum;
-      best.posDen+=g.posDen;
-      Object.keys(g.urls).forEach(url=>{
-        const src=g.urls[url];
-        const dst=best.urls[url]||(best.urls[url]={url:url,impressions:0,clicks:0,posNum:0,posDen:0});
-        dst.impressions+=src.impressions;
-        dst.clicks+=src.clicks;
-        dst.posNum+=src.posNum;
-        dst.posDen+=src.posDen;
-      });
-      if(g.impressions>best.primaryImpressions){
-        best.primaryQuery=g.query;
-        best.primaryImpressions=g.impressions;
-      }
-    } else {
-      clusters.push({
-        primaryQuery:g.query,
-        primaryImpressions:g.impressions,
-        members:[g],
-        urls:Object.assign({},g.urls),
-        clicks:g.clicks,
-        impressions:g.impressions,
-        posNum:g.posNum,
-        posDen:g.posDen
-      });
-    }
-  });
+  all.forEach(g=>{
+    const urls=Object.values(g.urls).sort((a,b)=>b.impressions-a.impressions);
+    const owned=skeOwnedQueryAssessment_(g.query,urls,articleRows);
 
-  const maxImp=Math.max(1,...clusters.map(x=>x.impressions));
-  const evaluated=[];
-
-  // 3) Existing Article Gate → 4) Candidate Score
-  clusters.forEach(c=>{
-    const urls=Object.values(c.urls).sort((a,b)=>b.impressions-a.impressions);
-    const urlCount=urls.length;
-    const primaryUrl=urls[0]?urls[0].url:'';
-    const match=skeFindBestArticleMatch_(c.primaryQuery,primaryUrl,articleRows);
-
-    let existing='POSSIBLE_OVERLAP';
-    let decision='DOCTOR_REVIEW';
-    let status='DISCOVERED';
-    let relatedId='';
-    let reason='';
-
-    if(match && match.score>=0.72){
-      existing='EXISTING_ARTICLE_FOUND';
-      decision='WRITER_REDIRECT';
-      status='WRITER_REDIRECT';
-      relatedId=match.articleId||'';
-      reason='既存記事がこの検索意図を強く担当しているため、新記事より既存記事改善を優先。';
-    } else if(urlCount>=2){
-      existing='POSSIBLE_OVERLAP';
-      decision='WRITER_REDIRECT';
-      status='WRITER_REDIRECT';
-      relatedId=match?match.articleId||'':'';
-      reason='同じ検索意図が複数URLに分散しているため、新記事より既存記事整理を優先。';
-    } else if(match && match.score>=0.42){
-      existing='POSSIBLE_OVERLAP';
-      decision='DOCTOR_REVIEW';
-      relatedId=match.articleId||'';
-      reason='近い既存記事があるため、独立記事化できるかDoctorで確認。';
-    } else if(articleRows.length){
-      existing='VERIFIED_NO_CONFLICT';
-      decision='DOCTOR_REVIEW';
-      reason='Article Master照合では強い重複が見つからず、専用記事の余地をDoctorで確認する価値がある。';
-    } else {
-      existing='POSSIBLE_OVERLAP';
-      decision='DOCTOR_REVIEW';
-      reason='Article Master未登録のため既存記事との重複判定は未確定。';
+    // OWNED_QUERY Gate: 既存記事が強く担当しているQueryはSKE新記事候補から除外
+    if(owned && owned.score>=.62){
+      ownedExcluded++;
+      return;
     }
 
-    const maturity=c.impressions>=50?'OBSERVED':c.impressions>=10?'EMERGING':'PREDICTED';
-    const demand=Math.min(25,Math.round(25*Math.log1p(c.impressions)/Math.log1p(maxImp)));
-    const pos=c.posDen?c.posNum/c.posDen:0;
-    const posScore=pos>0&&pos<=20?20:pos>20&&pos<=40?12:6;
-    const fit=match&&match.score>=0.42?18:12;
-    const gapProxy=existing==='VERIFIED_NO_CONFLICT'?18:existing==='POSSIBLE_OVERLAP'?10:4;
-    const clusterBonus=Math.min(8,Math.max(0,c.members.length-1)*2);
-    let score=Math.max(0,Math.min(100,demand+posScore+fit+gapProxy+10+clusterBonus));
-
-    if(decision==='WRITER_REDIRECT') score=Math.min(score,74);
-    if(score<50 && decision==='DOCTOR_REVIEW'){
-      decision='DROP';
-      status='BLOCK';
-      reason+=' P1 Scoreが低いため候補外。';
+    const novelty=skeNoveltySignal_(g.query,g.impressions,urls.length,owned);
+    if(novelty.score<=0){
+      noNoveltyExcluded++;
+      return;
     }
 
-    const variants=c.members
-      .slice()
-      .sort((a,b)=>b.impressions-a.impressions)
-      .map(x=>x.query)
-      .filter((x,i,a)=>a.indexOf(x)===i)
-      .slice(0,5);
+    const pos=g.posDen?g.posNum/g.posDen:0;
+    const demand=Math.min(25,Math.round(25*Math.log1p(g.impressions)/Math.log1p(maxImp)));
+    const noveltyScore=novelty.score===2?25:16;
+    const ownershipGap=!owned||owned.score<.42?25:14;
+    const posScore=pos>0&&pos<=20?12:pos<=40?8:5;
+    const score=Math.min(100,demand+noveltyScore+ownershipGap+posScore+8);
 
-    if(variants.length>1){
-      reason+=' 同一意図Cluster: '+variants.join(' / ');
-    }
+    const relatedId=owned?owned.articleId||'':'';
+    const existing=!owned||owned.score<.42?'VERIFIED_NO_STRONG_OWNER':'POSSIBLE_OVERLAP';
+    const reason=
+      `新規性=${novelty.type}。`+
+      (owned?`最も近い既存記事との類似度=${Math.round(owned.score*100)}%。`:'近い既存記事なし。')+
+      ` 既存記事が強く所有するQueryは除外済み。外部Web/SERPで需要と情報ギャップをDoctorが確認する。`;
 
-    evaluated.push({
-      query:c.primaryQuery,
-      score:score,
-      maturity:maturity,
-      existing:existing,
-      decision:decision,
-      status:status,
-      relatedId:relatedId,
-      urls:urls,
-      impressions:c.impressions,
-      clicks:c.clicks,
-      pos:pos,
-      urlCount:urlCount,
-      reason:reason
+    candidates.push({
+      query:g.query,score:score,maturity:g.impressions>=50?'OBSERVED':g.impressions>=10?'EMERGING':'PREDICTED',
+      existing:existing,relatedId:relatedId,urls:urls,impressions:g.impressions,clicks:g.clicks,pos:pos,
+      urlCount:urls.length,reason:reason,novelty:novelty.type
     });
   });
 
-  // 5) Candidate Gate: 実用候補 最大10件 / Doctor候補 最大3件
-  evaluated.sort((a,b)=>{
-    const rank=x=>x.decision==='DOCTOR_REVIEW'?0:x.decision==='WRITER_REDIRECT'?1:2;
-    return rank(a)-rank(b) || b.score-a.score || b.impressions-a.impressions;
-  });
+  candidates.sort((a,b)=>b.score-a.score||b.impressions-a.impressions);
+  const picked=candidates.slice(0,10);
 
-  const picked=[];
-  let doctorCount=0;
-  for(let i=0;i<evaluated.length && picked.length<10;i++){
-    const e=evaluated[i];
-    if(e.decision==='DROP') continue;
-    if(e.decision==='DOCTOR_REVIEW'){
-      if(doctorCount>=3) continue;
-      doctorCount++;
-    }
-    picked.push(e);
-  }
-
-  // 同じサイトの未処置P1候補は再探索結果で置換。Doctor回答済み/公開済みは保持。
   skeRemoveRegeneratableCandidates_(siteId);
-
-  const out=picked.map(e=>{
-    const cid=skeCandidateId_(siteId,e.query);
-    return [
-      false,cid,siteId,skeGetSetting_('siteName'),e.query,'INTERNAL_GSC',
-      e.score,e.maturity,'UNKNOWN',e.existing,e.relatedId,
-      e.urls.slice(0,3).map(x=>x.url).join('\n'),
-      e.decision,e.status,e.impressions,e.clicks,e.pos,e.urlCount,e.reason,
-      '','','','','',new Date()
-    ];
-  });
+  const out=picked.map(e=>[
+    false,skeCandidateId_(siteId,e.query),siteId,skeGetSetting_('siteName'),e.query,'INTERNAL_PERSONA_GSC',
+    e.score,e.maturity,'UNKNOWN',e.existing,e.relatedId,e.urls.slice(0,3).map(x=>x.url).join('\n'),
+    'DOCTOR_REVIEW','DISCOVERED',e.impressions,e.clicks,e.pos,e.urlCount,e.reason,'','','','','',new Date()
+  ]);
 
   const sh=skeSheet_(SKE_CONFIG.sheets.candidates);
   if(out.length){
     sh.getRange(sh.getLastRow()+1,1,out.length,SKE_CONFIG.candidateHeaders.length).setValues(out);
     sh.getRange(2,1,sh.getLastRow()-1,1).insertCheckboxes();
   }
-
   skeFormatCandidates_();
   skeRenderHome();
 
-  const writerCount=out.filter(r=>String(r[12])==='WRITER_REDIRECT').length;
   SpreadsheetApp.getUi().alert(
-    '内部探索が完了しました。\n\n' +
-    `実用候補：${out.length}件（最大10件）\n` +
-    `Doctor診断候補：${doctorCount}件（最大3件）\n` +
-    `既存記事改善候補：${writerCount}件\n\n` +
-    '「4. 候補を確認する」で内容を確認してください。'
+    '内部探索が完了しました。\n\n'+
+    `検索ペルソナ：${personaRows.length}グループ\n`+
+    `OWNED_QUERY除外：${ownedExcluded}件\n`+
+    `新規性不足除外：${noNoveltyExcluded}件\n`+
+    `内部Blue Ocean候補：${out.length}件（最大10件）\n\n`+
+    '次は「4. 検索ペルソナを確認する」で、このブログに来ている検索ニーズの集団を確認してください。'
   );
-}
-
-function skeClusterSimilarity_(a,b){
-  const na=skeNormalizeQuery_(a), nb=skeNormalizeQuery_(b);
-  if(!na||!nb) return 0;
-  if(na===nb) return 1;
-  if(na.indexOf(nb)>=0||nb.indexOf(na)>=0) return .88;
-
-  const ta=skeQueryTokens_(na), tb=skeQueryTokens_(nb);
-  if(!ta.length||!tb.length) return 0;
-
-  const sa={}; ta.forEach(x=>sa[x]=1);
-  const sb={}; tb.forEach(x=>sb[x]=1);
-  let common=0;
-  Object.keys(sa).forEach(x=>{if(sb[x])common++;});
-  const union={}; ta.concat(tb).forEach(x=>union[x]=1);
-  const jaccard=common/Math.max(Object.keys(union).length,1);
-
-  // 長いエラー文など、語尾だけ違う派生Queryをまとめやすくする
-  const prefix=(na.slice(0,32)===nb.slice(0,32))?0.18:0;
-  return Math.min(1,jaccard+prefix);
-}
-
-function skeFindBestArticleMatch_(query,primaryUrl,articleRows){
-  let best=null;
-  articleRows.forEach(r=>{
-    const url=skeNormalizeUrl_(skeObj_(r,['記事URL','URL','url'])||'');
-    if(!url) return;
-    const title=String(skeObj_(r,['記事タイトル','タイトル','title'])||'');
-    const mainQuery=String(skeObj_(r,['メインクエリ','Main Query','main_query'])||'');
-    const articleId=String(skeObj_(r,['ArticleID','記事ID','article_id'])||'');
-
-    let score=Math.max(
-      skeQuerySimilarity_(query,mainQuery),
-      skeTitleQueryCoverage_(title,query)
-    );
-    if(primaryUrl && url===primaryUrl) score=Math.max(score,.55);
-
-    if(!best || score>best.score){
-      best={score:score,url:url,title:title,mainQuery:mainQuery,articleId:articleId};
-    }
-  });
-  return best;
-}
-
-function skeRemoveRegeneratableCandidates_(siteId){
-  const sh=skeSheet_(SKE_CONFIG.sheets.candidates);
-  if(sh.getLastRow()<2) return;
-
-  const vals=sh.getDataRange().getValues();
-  const h=vals[0].map(String), ix={};
-  h.forEach((x,i)=>ix[x]=i);
-
-  const keep=[vals[0]];
-  for(let r=1;r<vals.length;r++){
-    const row=vals[r];
-    const sameSite=String(row[ix['SiteID']]||'')===String(siteId);
-    const doctorDone=String(row[ix['Doctor判定']]||'').trim()!=='';
-    const published=String(row[ix['公開ArticleID']]||'').trim()!=='' || String(row[ix['公開URL']]||'').trim()!=='';
-    const state=String(row[ix['状態']]||'');
-    const regeneratable=sameSite && !doctorDone && !published &&
-      ['DISCOVERED','WRITER_REDIRECT','BLOCK'].indexOf(state)>=0;
-
-    if(!regeneratable) keep.push(row);
-  }
-
-  sh.clearContents();
-  sh.getRange(1,1,keep.length,keep[0].length).setValues(keep);
 }
 
 function skeOpenCandidates(){ const sh=skeSheet_(SKE_CONFIG.sheets.candidates); SpreadsheetApp.getActive().setActiveSheet(sh); }
@@ -554,7 +489,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.3',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.4',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -587,7 +522,7 @@ function skeCandidateEvidenceCsv_(query){
 
 function skeArticleMasterHelp(){
   const sh=skeSheet_(SKE_CONFIG.sheets.articleMaster); if(sh.isSheetHidden())sh.showSheet(); SpreadsheetApp.getActive().setActiveSheet(sh);
-  SpreadsheetApp.getUi().alert('Article Masterは任意ですが、候補の重複判定精度が大きく上がります。\n\n列：ArticleID / 記事タイトル / 記事URL / メインクエリ / SearchIntent / 状態\n\nSBM等から取得できる記事情報を2行目以降へ貼り付けてください。');
+  SpreadsheetApp.getUi().alert('v0.1.4ではArticle Masterは必須です。既存記事とのカニバリを避けるため、新記事候補探索の前に登録してください。\n\n列：ArticleID / 記事タイトル / 記事URL / メインクエリ / SearchIntent / 状態\n\nSBM等から取得できる記事情報を2行目以降へ貼り付けてください。');
 }
 
 function skeBuildArticleMasterMap_(){
