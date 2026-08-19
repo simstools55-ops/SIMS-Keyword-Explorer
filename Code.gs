@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.2.2
+ * SIMS Keyword Explorer v0.2.3
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -19,7 +19,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.2.2';
+const SKE_VERSION = '0.2.3';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -285,9 +285,9 @@ function skeBuildPersonaProfile_(qRows){
 
   const targetDefs=[
     // Order matters: named services/products before broad platform categories.
-    {key:'GEN_AI', label:'生成AI', re:/chat\s?gpt|chatgpt|チャット\s?gpt|チャットgpt|gemini|ジェミニ|claude|クロード|copilot|openai|生成ai|人工知能|(?:s|o)mething went wrong and (?:the content|an ai response) wasn'?t generated|we experienced an error when generating images|rate limit exceeded/i,
+    {key:'GEN_AI', label:'生成AI', re:/chat\s?gpt|chatgpt|チャット\s?gpt|チャットgpt|gemini|ジェミニ|claude|クロード|copilot|openai|生成ai|人工知能|(?:s|o)mething went wrong and (?:the content|an ai response) wasn(?:'|’|\s)?t generated|we experienced an error when generating images|rate limit exceeded|いつもより時間がかかっています|応答が未完了です/i,
      explore:'生成AIの新エラー、仕様変更、モデル変更、新機能、障害'},
-    {key:'MICROSOFT_SERVICE', label:'Microsoftサービス', re:/\bteams\b|チームス|microsoft\s?teams|\boutlook\b|\bonedrive\b|\bexcel\b|エクセル|\bword\b|ワード|\bpowerpoint\b/i,
+    {key:'MICROSOFT_SERVICE', label:'Microsoftサービス', re:/\bteams\b|チームス|microsoft\s?teams|\boutlook\b|\bonedrive\b|\bexcel\b|エクセル|\bword\b|(?:^|[\s　])ワード(?:$|[\s　])|\bpowerpoint\b/i,
      explore:'Microsoftサービスの障害、UI変更、制限変更、新機能、設定変更'},
     {key:'VIDEO_SNS', label:'動画・SNS', re:/youtube|ユーチューブ|\bline\b|ライン|instagram|インスタ|tiktok|twitter|ツイッター|\bx\b\s*(?:ポスト|制限)|facebook|threads/i,
      explore:'SNS/動画サービスのUI変更、新設定、新不具合、機能廃止'},
@@ -325,6 +325,16 @@ function skeBuildPersonaProfile_(qRows){
 
   const pickTarget=q=>{
     const s=String(q||'').normalize('NFKC');
+
+    // Explicit Windows context should not be stolen by generic product-word substrings
+    // such as パスワード containing ワード.
+    const explicitWindows=/windows\s?1[01]|windows|win\s?1[01]|25h2|24h2/i.test(s);
+    const explicitMsApp=/\bteams\b|チームス|microsoft\s?teams|\boutlook\b|\bonedrive\b|\bexcel\b|エクセル|\bword\b|(?:^|[\s　])ワード(?:$|[\s　])|\bpowerpoint\b/i.test(s);
+    if(explicitWindows && !explicitMsApp){
+      const win=targetDefs.find(d=>d.key==='WINDOWS');
+      if(win) return win;
+    }
+
     for(const d of targetDefs){ if(d.re.test(s)) return d; }
 
     // Distinguish dictionary shortage from genuinely unknown topics.
@@ -561,7 +571,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.2.2',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.2.3',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
