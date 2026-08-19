@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.1.4
+ * SIMS Keyword Explorer v0.1.5
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -19,7 +19,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.1.4';
+const SKE_VERSION = '0.1.5';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -56,10 +56,11 @@ function skeBuildMenu_() {
   ui.createMenu('SIMS Keyword Explorer')
     .addItem('1. 初期設定 / 対象ブログを準備', 'skeInitialSetup')
     .addItem('2. Evidenceを読み込む', 'skeImportEvidencePrompt')
-    .addItem('3. 新しいキーワード候補を探す', 'skeRunInternalDiscovery')
-    .addItem('4. 検索ペルソナを確認する', 'skeOpenPersonaProfile')
-    .addItem('5. 候補を確認する', 'skeOpenCandidates')
-    .addItem('6. 処置を進める', 'skeContinueWorkflow')
+    .addItem('3. 検索ペルソナを分析する', 'skeRunPersonaAnalysis')
+    .addItem('4. 新しいキーワード候補を探す', 'skeRunInternalDiscovery')
+    .addItem('5. 検索ペルソナを確認する', 'skeOpenPersonaProfile')
+    .addItem('6. 候補を確認する', 'skeOpenCandidates')
+    .addItem('7. 処置を進める', 'skeContinueWorkflow')
     .addSeparator()
     .addSubMenu(ui.createMenu('追加の操作')
       .addItem('Article Masterの使い方', 'skeArticleMasterHelp')
@@ -125,7 +126,7 @@ function skeRenderHome() {
     ['既存記事改善候補', count('WRITER_REDIRECT')],
     ['公開済み', count('PUBLISHED')],
     ['', ''],
-    ['次の操作', siteName==='未選択' ? '2. Evidenceを読み込む' : '3. 新しいキーワード候補を探す']
+    ['次の操作', siteName==='未選択' ? '2. Evidenceを読み込む' : '3. 検索ペルソナを分析する']
   ];
   sh.getRange(1,1,rows.length,2).setValues(rows);
   sh.getRange('A1:B1').setFontWeight('bold').setFontSize(16);
@@ -190,7 +191,7 @@ function skeImportSelectedEvidence(payload){
   const fileId=String(payload&&payload.fileId||'');
   if(!fileId)throw new Error('Evidence Packageが選択されていません。');
   const r=skeImportEvidenceById_(fileId);
-  return {ok:true,siteName:r.siteName,fileName:r.fileName,queryRows:r.queryRows,next:'次は「3. 新しいキーワード候補を探す」を実行してください。'};
+  return {ok:true,siteName:r.siteName,fileName:r.fileName,queryRows:r.queryRows,next:'次は「3. 検索ペルソナを分析する」を実行してください。'};
 }
 
 function skeEvidencePickerHtml_(o){
@@ -252,6 +253,21 @@ function skeImportEvidenceById_(fileId) {
   return {siteName,siteUrl,siteId,fileName:name,queryRows:Math.max(0,skeSheet_(SKE_CONFIG.sheets.pageQuery).getLastRow()-1)};
 }
 
+
+function skeRunPersonaAnalysis(){
+  skeSetup_();
+  const siteId=skeGetSetting_('siteId');
+  if(!siteId) throw new Error('先に「2. Evidenceを読み込む」を実行してください。');
+  const qRows=skeReadObjects_(SKE_CONFIG.sheets.pageQuery);
+  if(!qRows.length) throw new Error('page_query_top Evidenceがありません。');
+  const rows=skeBuildPersonaProfile_(qRows);
+  skeOpenPersonaProfile();
+  SpreadsheetApp.getUi().alert(
+    '検索ペルソナ分析が完了しました。\n\n'+
+    `検索ペルソナ：${rows.length}グループ\n\n`+
+    'この分析はEvidenceだけで実行できます。\nArticle Masterは新記事候補を探す段階で使用します。'
+  );
+}
 
 function skeOpenPersonaProfile(){
   const sh=skeSheet_(SKE_CONFIG.sheets.persona);
@@ -334,7 +350,7 @@ function skeBuildPersonaProfile_(qRows){
 function skeArticleMasterRequired_(){
   const rows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster);
   if(!rows.length){
-    throw new Error('v0.1.4では新記事候補のカニバリ防止のためArticle Masterが必須です。追加の操作 → Article Masterの使い方 から記事一覧を登録してください。');
+    throw new Error('新記事候補のカニバリ防止のため、候補探索にはArticle Masterが必要です。検索ペルソナ分析はArticle Masterなしで利用できます。候補探索を続ける場合は「追加の操作 → Article Masterの使い方」を開いてください。');
   }
   return rows;
 }
@@ -377,8 +393,8 @@ function skeRunInternalDiscovery() {
   const qRows=skeReadObjects_(SKE_CONFIG.sheets.pageQuery);
   if(!qRows.length) throw new Error('page_query_top Evidenceがありません。');
 
-  const articleRows=skeArticleMasterRequired_();
   const personaRows=skeBuildPersonaProfile_(qRows);
+  const articleRows=skeArticleMasterRequired_();
 
   const grouped={};
   qRows.forEach(r=>{
@@ -489,7 +505,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.4',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.5',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -522,7 +538,7 @@ function skeCandidateEvidenceCsv_(query){
 
 function skeArticleMasterHelp(){
   const sh=skeSheet_(SKE_CONFIG.sheets.articleMaster); if(sh.isSheetHidden())sh.showSheet(); SpreadsheetApp.getActive().setActiveSheet(sh);
-  SpreadsheetApp.getUi().alert('v0.1.4ではArticle Masterは必須です。既存記事とのカニバリを避けるため、新記事候補探索の前に登録してください。\n\n列：ArticleID / 記事タイトル / 記事URL / メインクエリ / SearchIntent / 状態\n\nSBM等から取得できる記事情報を2行目以降へ貼り付けてください。');
+  SpreadsheetApp.getUi().alert('新記事候補探索ではArticle Masterが必須です。検索ペルソナ分析だけなら不要です。既存記事とのカニバリを避けるため、候補探索前に登録してください。\n\n列：ArticleID / 記事タイトル / 記事URL / メインクエリ / SearchIntent / 状態\n\nSBM等から取得できる記事情報を2行目以降へ貼り付けてください。');
 }
 
 function skeBuildArticleMasterMap_(){
