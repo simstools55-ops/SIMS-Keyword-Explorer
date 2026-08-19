@@ -1,22 +1,9 @@
 # CHANGELOG
 
-## v0.1.2 - 2026-08-20
-- Evidence読込をGoogle Drive URL/ファイルID手入力から、Windows風のDriveファイル選択ダイアログへ変更。
-- フォルダー移動、Evidence ZIP選択、manifest情報の事前確認を追加。
-- 読込後にサイト名・Query行数・次操作を同一ダイアログへ表示。
-
-## v0.1.1
-- 初回起動時にメニューが表示されない不具合を修正。
-- `onOpen()` から初期化処理を分離し、メニュー生成を最優先化。
-- メニューへ `.addToUi()` を追加。
-- `onInstall()` と初回セットアップメニューを追加。
-- 利用手順のメニュー番号を整理。
-
-## v0.1.0
-- SIMS Keyword Explorer 初版P1プロトタイプ。
-- Collector Evidence ZIP読込。
-- 内部GSCクエリ探索。
-- Article Master任意照合。
-- Candidate Registry。
-- Doctor用ZIP生成。
-- SKE短縮ファイル命名規則を採用。
+## v0.2.0
+- Search Persona ProfileをSearch Audience Profileへ再設計
+- 対象軸と検索意図軸を独立分類
+- 固有サービス/製品を汎用PC分類より優先
+- OTHER / 未分類を保持して未知の需要を可視化
+- 代表Queryを上位5件から上位10件へ拡張
+- 外部探索テーマを「対象 × 意図」に連動

@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.1.5
+ * SIMS Keyword Explorer v0.2.0
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -19,7 +19,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.1.5';
+const SKE_VERSION = '0.2.0';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -31,7 +31,7 @@ const SKE_CONFIG = {
     pageQuery: '_SKE_EVIDENCE_PAGE_QUERY',
     querySummary: '_SKE_EVIDENCE_QUERY_SUMMARY',
     articleMaster: '_SKE_ARTICLE_MASTER',
-    persona: '検索ペルソナ'
+    persona: '検索オーディエンス'
   },
   candidateHeaders: [
     '選択','Candidate ID','SiteID','ブログ','Primary Query','Discovery Type',
@@ -56,9 +56,9 @@ function skeBuildMenu_() {
   ui.createMenu('SIMS Keyword Explorer')
     .addItem('1. 初期設定 / 対象ブログを準備', 'skeInitialSetup')
     .addItem('2. Evidenceを読み込む', 'skeImportEvidencePrompt')
-    .addItem('3. 検索ペルソナを分析する', 'skeRunPersonaAnalysis')
+    .addItem('3. 検索オーディエンスを分析する', 'skeRunPersonaAnalysis')
     .addItem('4. 新しいキーワード候補を探す', 'skeRunInternalDiscovery')
-    .addItem('5. 検索ペルソナを確認する', 'skeOpenPersonaProfile')
+    .addItem('5. 検索オーディエンスを確認する', 'skeOpenPersonaProfile')
     .addItem('6. 候補を確認する', 'skeOpenCandidates')
     .addItem('7. 処置を進める', 'skeContinueWorkflow')
     .addSeparator()
@@ -100,7 +100,7 @@ function skeSetup_() {
   ensure(SKE_CONFIG.sheets.pageQuery, null, true);
   ensure(SKE_CONFIG.sheets.querySummary, null, true);
   ensure(SKE_CONFIG.sheets.articleMaster, ['ArticleID','記事タイトル','記事URL','メインクエリ','SearchIntent','状態'], true);
-  ensure(SKE_CONFIG.sheets.persona, ['順位','検索ペルソナ','主な対象','主な困りごと','代表クエリ','表示回数','クリック','構成比','外部探索テーマ'], false);
+  ensure(SKE_CONFIG.sheets.persona, ['順位','検索オーディエンス','対象軸','意図軸','代表クエリ','表示回数','クリック','構成比','外部探索テーマ'], false);
   skeSetSetting_('version', SKE_VERSION);
   skeRenderHome();
 }
@@ -126,7 +126,7 @@ function skeRenderHome() {
     ['既存記事改善候補', count('WRITER_REDIRECT')],
     ['公開済み', count('PUBLISHED')],
     ['', ''],
-    ['次の操作', siteName==='未選択' ? '2. Evidenceを読み込む' : '3. 検索ペルソナを分析する']
+    ['次の操作', siteName==='未選択' ? '2. Evidenceを読み込む' : '3. 検索オーディエンスを分析する']
   ];
   sh.getRange(1,1,rows.length,2).setValues(rows);
   sh.getRange('A1:B1').setFontWeight('bold').setFontSize(16);
@@ -191,7 +191,7 @@ function skeImportSelectedEvidence(payload){
   const fileId=String(payload&&payload.fileId||'');
   if(!fileId)throw new Error('Evidence Packageが選択されていません。');
   const r=skeImportEvidenceById_(fileId);
-  return {ok:true,siteName:r.siteName,fileName:r.fileName,queryRows:r.queryRows,next:'次は「3. 検索ペルソナを分析する」を実行してください。'};
+  return {ok:true,siteName:r.siteName,fileName:r.fileName,queryRows:r.queryRows,next:'次は「3. 検索オーディエンスを分析する」を実行してください。'};
 }
 
 function skeEvidencePickerHtml_(o){
@@ -263,8 +263,8 @@ function skeRunPersonaAnalysis(){
   const rows=skeBuildPersonaProfile_(qRows);
   skeOpenPersonaProfile();
   SpreadsheetApp.getUi().alert(
-    '検索ペルソナ分析が完了しました。\n\n'+
-    `検索ペルソナ：${rows.length}グループ\n\n`+
+    '検索オーディエンス分析が完了しました。\n\n'+
+    `検索オーディエンス：${rows.length}グループ\n\n`+
     'この分析はEvidenceだけで実行できます。\nArticle Masterは新記事候補を探す段階で使用します。'
   );
 }
@@ -275,65 +275,95 @@ function skeOpenPersonaProfile(){
 }
 
 function skeBuildPersonaProfile_(qRows){
-  const defs=[
-    {name:'Windows困りごと層', target:'Windows / PC', problem:'設定・エラー・できない・戻らない', re:/\bwindows\b|windows ?1[01]|win ?1[01]|pc\b|パソコン|defender|office|edge/i,
-     intent:/できない|エラー|error|消え|戻ら|反応しない|開かない|解除|設定|不具合|トラブル/i,
-     explore:'Windows Update、新機能、廃止機能、仕様変更、不具合、エラーメッセージ'},
-    {name:'Apple設定・トラブル層', target:'iPhone / Apple Watch / Mac', problem:'同期・設定・使い方・不具合', re:/iphone|ipad|apple ?watch|mac(book|os)?|ios|watchos|icloud|airpods/i,
-     intent:/できない|同期|設定|使い方|方法|消え|反応|エラー|解除|変更/i,
-     explore:'iOS/macOS/watchOS新機能、設定変更、同期問題、仕様変更'},
-    {name:'Androidトラブル層', target:'Android / Pixel / Galaxy', problem:'アップデート後・表示・設定・不具合', re:/android|pixel|galaxy|quick ?share|google ?play/i,
-     intent:/できない|消え|表示されない|追加できない|反応しない|設定|アップデート|不具合|エラー/i,
-     explore:'Android/Pixel新機能、OS更新後の不具合、Google公式修正情報'},
-    {name:'生成AIトラブル層', target:'ChatGPT / Gemini / Claude等', problem:'生成失敗・エラー・使い方', re:/chat ?gpt|chatgpt|gemini|claude|copilot|ai\b|openai/i,
-     intent:/error|エラー|something went wrong|できない|生成|使い方|意味|直し方|反応/i,
+  // v0.2.0 Search Audience Profile:
+  // classify each query independently on two axes:
+  //   Target = what product/platform/service is being searched
+  //   Intent = what the searcher wants to do/solve
+  // This prevents "YouTube 開かない" from becoming Windows merely because
+  // a generic PC term appears, and prevents AI error-message queries ending
+  // up in a generic "意味" bucket.
+
+  const targetDefs=[
+    {key:'GEN_AI', label:'生成AI', re:/chat ?gpt|chatgpt|gemini|claude|copilot|openai|生成ai|人工知能/i,
      explore:'生成AIの新エラー、仕様変更、モデル変更、新機能、障害'},
-    {name:'動画・SNS設定層', target:'YouTube / LINE / Instagram等', problem:'再生・通知・表示・設定', re:/youtube|line|instagram|インスタ|tiktok|x twitter|twitter|facebook/i,
-     intent:/できない|設定|解除|オフ|消え|通知|再生|開かない|反応/i,
+    {key:'VIDEO_SNS', label:'動画・SNS', re:/youtube|line|instagram|インスタ|tiktok|twitter|x.com|facebook|threads/i,
      explore:'SNS/動画サービスのUI変更、新設定、新不具合、機能廃止'},
-    {name:'PC・IT用語調査層', target:'PC / IT一般', problem:'意味・違い・仕組みを知りたい', re:/とは|意味|違い|仕組み|種類|役割|読み方/i,
-     intent:/とは|意味|違い|仕組み|種類|役割|読み方/i,
+    {key:'APPLE', label:'Apple', re:/iphone|ipad|apple ?watch|macbook|macos|\bmac\b|ios|watchos|icloud|airpods|vo2max/i,
+     explore:'iOS/macOS/watchOS新機能、設定変更、同期問題、仕様変更'},
+    {key:'ANDROID', label:'Android', re:/android|pixel|galaxy|quick ?share|google ?play|safetycore/i,
+     explore:'Android/Pixel新機能、OS更新後の不具合、Google公式修正情報'},
+    {key:'WINDOWS', label:'Windows', re:/windows ?1[01]|windows|win ?1[01]|defender|edge|office|microsoft 365|25h2|24h2/i,
+     explore:'Windows Update、新機能、廃止機能、仕様変更、不具合、エラーメッセージ'},
+    {key:'PC_DEVICE', label:'PC・周辺機器', re:/\bpc\b|パソコン|bios|uefi|hdd|ssd|usb|ルーター|wi-?fi|ネットワーク|モニター|プリンター/i,
+     explore:'PC/周辺機器の新規格、設定変更、互換性問題、新しいトラブル'},
+    {key:'IT_GENERAL', label:'IT一般', re:/トラッカー|クラウド|アカウント|ブラウザ|サーバー|ネットワーク機器/i,
      explore:'新しいPC/IT用語、新規格、新サービス、新機能の初心者向け解説'}
   ];
 
-  const stats={};
-  defs.forEach(d=>stats[d.name]={def:d,impressions:0,clicks:0,queries:{}});
-  let totalImp=0;
+  const intentDefs=[
+    {key:'ERROR', label:'エラー・不具合解決', re:/something went wrong|error|エラー|不具合|失敗|できない|開かない|表示されない|反応しない|消えた|消え|戻らない|生成されない/i},
+    {key:'SETTING', label:'設定変更・解除', re:/設定|解除|オフ|オン|戻す|元に戻す|変更|増やす|パスワード|自動再生/i},
+    {key:'UPDATE', label:'更新・導入', re:/アップデート|update|ダウンロード|インストール|25h2|24h2|移行|機種変更/i},
+    {key:'HOWTO', label:'使い方・操作', re:/使い方|やり方|方法|手順|追加|共有|見る方法|再生/i},
+    {key:'SYNC', label:'同期・接続', re:/同期|接続|つながらない|繋がらない|認識しない|ペアリング/i},
+    {key:'MEANING', label:'意味・仕組み理解', re:/とは|意味|違い|仕組み|種類|役割|読み方/i},
+    {key:'CHANGE', label:'仕様変更・新機能確認', re:/変わった|なくなった|廃止|新機能|仕様変更|対応機種|いつから/i}
+  ];
 
+  const pickTarget=q=>{
+    // Specific named services/products take priority over generic PC terms.
+    for(const d of targetDefs){ if(d.re.test(q)) return d; }
+    return {key:'OTHER',label:'OTHER / 未分類',explore:'未分類クエリを確認し、新しい対象カテゴリ候補を発見する'};
+  };
+  const pickIntent=q=>{
+    // Error/problem intent has priority; "意味" in an AI error query remains AI × meaning,
+    // because target and intent are now independent.
+    for(const d of intentDefs){ if(d.re.test(q)) return d; }
+    return {key:'OTHER',label:'OTHER / 未分類'};
+  };
+
+  const stats={};
+  let totalImp=0,totalClicks=0;
   qRows.forEach(r=>{
     const q=String(skeObj_(r,['query','クエリ'])||'').trim();
     if(!q)return;
     const imp=Number(skeObj_(r,['impressions','表示回数'])||0);
     const clk=Number(skeObj_(r,['clicks','クリック数'])||0);
-    totalImp+=imp;
+    totalImp+=imp; totalClicks+=clk;
 
-    let best=null,score=-1;
-    defs.forEach(d=>{
-      let s=0;
-      if(d.re.test(q))s+=2;
-      if(d.intent.test(q))s+=1;
-      if(s>score){score=s;best=d;}
+    const t=pickTarget(q), it=pickIntent(q);
+    const key=t.key+'__'+it.key;
+    const st=stats[key]||(stats[key]={
+      target:t.label,intent:it.label,explore:t.explore,
+      impressions:0,clicks:0,queries:{}
     });
-    if(!best || score<=0)return;
-    const st=stats[best.name];
-    st.impressions+=imp;st.clicks+=clk;
+    st.impressions+=imp; st.clicks+=clk;
     const nq=skeNormalizeQuery_(q);
-    const x=st.queries[nq]||(st.queries[nq]={q:q,imp:0});
-    x.imp+=imp;
+    const x=st.queries[nq]||(st.queries[nq]={q:q,imp:0,clk:0});
+    x.imp+=imp; x.clk+=clk;
   });
 
-  const rows=Object.values(stats)
+  let rows=Object.values(stats)
     .filter(x=>x.impressions>0)
     .sort((a,b)=>b.impressions-a.impressions)
-    .slice(0,8)
     .map((x,i)=>{
-      const reps=Object.values(x.queries).sort((a,b)=>b.imp-a.imp).slice(0,5).map(y=>y.q).join(' / ');
-      return [i+1,x.def.name,x.def.target,x.def.problem,reps,x.impressions,x.clicks,totalImp?x.impressions/totalImp:0,x.def.explore];
+      const reps=Object.values(x.queries)
+        .sort((a,b)=>b.imp-a.imp)
+        .slice(0,10).map(y=>y.q).join(' / ');
+      const audience=x.target+' × '+x.intent;
+      const theme=(x.target.indexOf('OTHER')>=0 || x.intent.indexOf('OTHER')>=0)
+        ? 'OTHER分析対象：代表クエリから新しい分類ルールまたは探索テーマを発見する'
+        : x.explore+'。特に「'+x.intent+'」需要を優先探索する';
+      return [i+1,audience,x.target,x.intent,reps,x.impressions,x.clicks,totalImp?x.impressions/totalImp:0,theme];
     });
+
+  // Keep all meaningful combinations, but cap the visible sheet to 30 rows.
+  rows=rows.slice(0,30);
+  rows.forEach((r,i)=>r[0]=i+1);
 
   const sh=skeSheet_(SKE_CONFIG.sheets.persona);
   sh.clearContents();
-  sh.getRange(1,1,1,9).setValues([['順位','検索ペルソナ','主な対象','主な困りごと','代表クエリ','表示回数','クリック','構成比','外部探索テーマ']]);
+  sh.getRange(1,1,1,9).setValues([['順位','検索オーディエンス','対象軸','意図軸','代表クエリ','表示回数','クリック','構成比','外部探索テーマ']]);
   if(rows.length)sh.getRange(2,1,rows.length,9).setValues(rows);
   sh.setFrozenRows(1);
   sh.getRange(1,1,1,9).setFontWeight('bold').setWrap(true);
@@ -342,15 +372,19 @@ function skeBuildPersonaProfile_(qRows){
     sh.getRange(2,1,rows.length,9).setVerticalAlignment('top');
     [2,3,4,5,9].forEach(c=>sh.getRange(2,c,rows.length,1).setWrap(true));
   }
-  sh.setColumnWidth(1,55);sh.setColumnWidth(2,180);sh.setColumnWidth(3,190);sh.setColumnWidth(4,220);
-  sh.setColumnWidth(5,430);sh.setColumnWidth(6,100);sh.setColumnWidth(7,90);sh.setColumnWidth(8,90);sh.setColumnWidth(9,420);
+  sh.setColumnWidth(1,55);sh.setColumnWidth(2,240);sh.setColumnWidth(3,140);sh.setColumnWidth(4,180);
+  sh.setColumnWidth(5,520);sh.setColumnWidth(6,100);sh.setColumnWidth(7,90);sh.setColumnWidth(8,90);sh.setColumnWidth(9,460);
+
+  skeSetSetting_('audienceProfileGroups',String(rows.length));
+  skeSetSetting_('audienceProfileTotalImpressions',String(totalImp));
+  skeSetSetting_('audienceProfileTotalClicks',String(totalClicks));
   return rows;
 }
 
 function skeArticleMasterRequired_(){
   const rows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster);
   if(!rows.length){
-    throw new Error('新記事候補のカニバリ防止のため、候補探索にはArticle Masterが必要です。検索ペルソナ分析はArticle Masterなしで利用できます。候補探索を続ける場合は「追加の操作 → Article Masterの使い方」を開いてください。');
+    throw new Error('新記事候補のカニバリ防止のため、候補探索にはArticle Masterが必要です。検索オーディエンス分析はArticle Masterなしで利用できます。候補探索を続ける場合は「追加の操作 → Article Masterの使い方」を開いてください。');
   }
   return rows;
 }
@@ -475,11 +509,11 @@ function skeRunInternalDiscovery() {
 
   SpreadsheetApp.getUi().alert(
     '内部探索が完了しました。\n\n'+
-    `検索ペルソナ：${personaRows.length}グループ\n`+
+    `検索オーディエンス：${personaRows.length}グループ\n`+
     `OWNED_QUERY除外：${ownedExcluded}件\n`+
     `新規性不足除外：${noNoveltyExcluded}件\n`+
     `内部Blue Ocean候補：${out.length}件（最大10件）\n\n`+
-    '次は「4. 検索ペルソナを確認する」で、このブログに来ている検索ニーズの集団を確認してください。'
+    '次は「5. 検索オーディエンスを確認する」で、このブログに来ている検索行動グループを確認してください。'
   );
 }
 
@@ -505,7 +539,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.5',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.2.0',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -538,7 +572,7 @@ function skeCandidateEvidenceCsv_(query){
 
 function skeArticleMasterHelp(){
   const sh=skeSheet_(SKE_CONFIG.sheets.articleMaster); if(sh.isSheetHidden())sh.showSheet(); SpreadsheetApp.getActive().setActiveSheet(sh);
-  SpreadsheetApp.getUi().alert('新記事候補探索ではArticle Masterが必須です。検索ペルソナ分析だけなら不要です。既存記事とのカニバリを避けるため、候補探索前に登録してください。\n\n列：ArticleID / 記事タイトル / 記事URL / メインクエリ / SearchIntent / 状態\n\nSBM等から取得できる記事情報を2行目以降へ貼り付けてください。');
+  SpreadsheetApp.getUi().alert('新記事候補探索ではArticle Masterが必須です。検索オーディエンス分析だけなら不要です。既存記事とのカニバリを避けるため、候補探索前に登録してください。\n\n列：ArticleID / 記事タイトル / 記事URL / メインクエリ / SearchIntent / 状態\n\nSBM等から取得できる記事情報を2行目以降へ貼り付けてください。');
 }
 
 function skeBuildArticleMasterMap_(){
