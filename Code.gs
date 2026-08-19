@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.1.0
+ * SIMS Keyword Explorer v0.1.1
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -15,7 +15,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.1.0';
+const SKE_VERSION = '0.1.1';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -37,17 +37,37 @@ const SKE_CONFIG = {
 };
 
 function onOpen() {
-  skeSetup_();
-  SpreadsheetApp.getUi().createMenu('SIMS Keyword Explorer')
-    .addItem('1. 対象ブログ / Evidenceを読み込む', 'skeImportEvidencePrompt')
-    .addItem('2. 新しいキーワード候補を探す', 'skeRunInternalDiscovery')
-    .addItem('3. 候補を確認する', 'skeOpenCandidates')
-    .addItem('4. 処置を進める', 'skeContinueWorkflow')
+  // Menus must be added before any setup work. If setup fails on a fresh sheet,
+  // the user must still have a visible recovery path.
+  skeBuildMenu_();
+}
+
+function onInstall(e) {
+  onOpen(e);
+}
+
+function skeBuildMenu_() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('SIMS Keyword Explorer')
+    .addItem('1. 初期設定 / 対象ブログを準備', 'skeInitialSetup')
+    .addItem('2. Evidenceを読み込む', 'skeImportEvidencePrompt')
+    .addItem('3. 新しいキーワード候補を探す', 'skeRunInternalDiscovery')
+    .addItem('4. 候補を確認する', 'skeOpenCandidates')
+    .addItem('5. 処置を進める', 'skeContinueWorkflow')
     .addSeparator()
-    .addSubMenu(SpreadsheetApp.getUi().createMenu('追加の操作')
+    .addSubMenu(ui.createMenu('追加の操作')
       .addItem('Article Masterの使い方', 'skeArticleMasterHelp')
       .addItem('選択候補のDoctor用ZIPを作る', 'skeGenerateDoctorPackageForSelected')
-      .addItem('Homeを更新', 'skeRenderHome'));
+      .addItem('Homeを更新', 'skeRenderHome'))
+    .addToUi();
+}
+
+function skeInitialSetup() {
+  skeSetup_();
+  SpreadsheetApp.getUi().alert(
+    'SIMS Keyword Explorerの初期設定が完了しました。\n\n' +
+    '次の操作：「2. Evidenceを読み込む」を実行してください。'
+  );
 }
 
 function skeSetup_() {
@@ -98,7 +118,7 @@ function skeRenderHome() {
     ['既存記事改善候補', count('WRITER_REDIRECT')],
     ['公開済み', count('PUBLISHED')],
     ['', ''],
-    ['次の操作', siteName==='未選択' ? '1. 対象ブログ / Evidenceを読み込む' : '2. 新しいキーワード候補を探す']
+    ['次の操作', siteName==='未選択' ? '2. Evidenceを読み込む' : '3. 新しいキーワード候補を探す']
   ];
   sh.getRange(1,1,rows.length,2).setValues(rows);
   sh.getRange('A1:B1').setFontWeight('bold').setFontSize(16);
@@ -121,7 +141,7 @@ function skeImportEvidencePrompt() {
   const id = skeExtractDriveId_(res.getResponseText());
   if (!id) throw new Error('Google DriveのファイルIDを判定できませんでした。');
   const r = skeImportEvidenceById_(id);
-  ui.alert(`Evidenceを読み込みました。\n\nブログ：${r.siteName}\nファイル：${r.fileName}\nQuery行：${r.queryRows}\n\n次は「2. 新しいキーワード候補を探す」を実行してください。`);
+  ui.alert(`Evidenceを読み込みました。\n\nブログ：${r.siteName}\nファイル：${r.fileName}\nQuery行：${r.queryRows}\n\n次は「3. 新しいキーワード候補を探す」を実行してください。`);
 }
 
 function skeImportEvidenceById_(fileId) {
@@ -155,7 +175,7 @@ function skeImportEvidenceById_(fileId) {
 function skeRunInternalDiscovery() {
   skeSetup_();
   const siteId=skeGetSetting_('siteId');
-  if(!siteId) throw new Error('先に「1. 対象ブログ / Evidenceを読み込む」を実行してください。');
+  if(!siteId) throw new Error('先に「2. Evidenceを読み込む」を実行してください。');
   const qRows=skeReadObjects_(SKE_CONFIG.sheets.pageQuery);
   if(!qRows.length) throw new Error('page_query_top Evidenceがありません。');
   const articleMap=skeBuildArticleMasterMap_();
@@ -209,7 +229,7 @@ function skeRunInternalDiscovery() {
     sh.getRange(2,1,sh.getLastRow()-1,1).insertCheckboxes();
   }
   skeFormatCandidates_(); skeRenderHome();
-  SpreadsheetApp.getUi().alert(`内部探索が完了しました。\n新規候補：${out.length}件\n\n「3. 候補を確認する」で内容を確認してください。`);
+  SpreadsheetApp.getUi().alert(`内部探索が完了しました。\n新規候補：${out.length}件\n\n「4. 候補を確認する」で内容を確認してください。`);
 }
 
 function skeOpenCandidates(){ const sh=skeSheet_(SKE_CONFIG.sheets.candidates); SpreadsheetApp.getActive().setActiveSheet(sh); }
@@ -234,7 +254,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.0',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.1',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},

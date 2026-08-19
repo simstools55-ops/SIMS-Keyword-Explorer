@@ -1,4 +1,4 @@
-# SIMS Keyword Explorer v0.1.0
+# SIMS Keyword Explorer v0.1.1
 
 ## この版について
 P1（内部探索）プロトタイプです。SIMS Site Collector Evidence ZIPを読み込み、GSCクエリから候補を抽出し、Candidate Registryへ登録してDoctor用ZIPを生成します。
@@ -6,11 +6,15 @@ P1（内部探索）プロトタイプです。SIMS Site Collector Evidence ZIP�
 ## 初回手順
 1. 新しいGoogleスプレッドシートを作成します。
 2. Apps Scriptへ `Code.gs` と `appsscript.json` を反映します。
-3. スプレッドシートを再読み込みします。
-4. `SIMS Keyword Explorer` → `1. 対象ブログ / Evidenceを読み込む` を実行します。
-5. Collectorが生成したEvidence ZIPのDrive URLまたはIDを貼り付けます。
-6. `2. 新しいキーワード候補を探す` を実行します。
-7. `キーワード候補` でDoctorへ送りたい候補にチェックを入れ、Doctor用ZIPを生成します。
+3. Apps Scriptを保存し、スプレッドシートを再読み込みします。
+4. 上部に `SIMS Keyword Explorer` メニューが表示されたら、`1. 初期設定 / 対象ブログを準備` を実行します。
+5. `2. Evidenceを読み込む` を実行し、SIMS Site Collectorが生成したEvidence ZIPのDrive URLまたはIDを貼り付けます。
+6. `3. 新しいキーワード候補を探す` を実行します。
+7. `4. 候補を確認する` で内容を確認します。
+8. Doctorへ送りたい候補にチェックを入れ、`5. 処置を進める` または追加操作からDoctor用ZIPを生成します。
+
+## メニューが表示されない場合
+`onOpen()` はメニュー生成だけを行う設計です。コード保存後にスプレッドシートを再読み込みしてください。初期設定でエラーが起きても、次回再読み込み時にメニュー自体は表示できる構造です。
 
 ## Article Master（任意）
 既存記事との重複判定精度を高めるため、`追加の操作` → `Article Masterの使い方` から `_SKE_ARTICLE_MASTER` を開き、SBM等の既存記事データを貼り付けられます。
