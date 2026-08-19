@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.3.1
+ * SIMS Keyword Explorer v0.3.2
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -18,6 +18,7 @@
  * - Doctor External Discovery Package
  * - Doctor result import (full answer or JSON)
  * - SBM article-list compatible Article Master import
+ * - Idempotent Doctor result import with duplicate update / rejection tracking
  * - Article Master cannibalization gate before Candidate Registry (SBM-compatible)
  *
  * Not included:
@@ -25,7 +26,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.3.1';
+const SKE_VERSION = '0.3.2';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -577,7 +578,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.3.1',
+    contract_version:'0.3.2',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -696,7 +697,14 @@ function skeImportExternalDoctorResultPrompt(){
         const t=document.getElementById('text').value;
         document.getElementById('err').textContent='';
         google.script.run.withSuccessHandler(r=>{
-          alert('取り込み完了\\n外部候補: '+r.imported+'件\\nWriter振替: '+r.writer+'件\\nDoctor候補: '+r.doctor+'件');
+          alert(
+            '取り込み完了\\n'+
+            '処理候補: '+r.processed+'件（新規 '+r.imported+' / 既存更新 '+r.updated+'）\\n'+
+            'Writer振替: '+r.writer+'件\\n'+
+            'Doctor候補: '+r.doctor+'件\\n'+
+            'Doctor見送り: '+r.rejected+'件\\n'+
+            (r.invalid ? '無効候補: '+r.invalid+'件\\n' : '')
+          );
           google.script.host.close();
         }).withFailureHandler(e=>{
           document.getElementById('err').textContent=e.message||e;
@@ -712,31 +720,64 @@ function skeImportExternalDoctorResult(text){
   if(String(obj.format||'')!=='SIMS_DOCTOR_EXTERNAL_DISCOVERY_RESULT_V1'){
     throw new Error('外部探索結果のformatが一致しません: '+String(obj.format||'未指定'));
   }
+
   const list=Array.isArray(obj.candidates)?obj.candidates:[];
-  if(!list.length) throw new Error('candidates がありません。');
+  const rejectedList=Array.isArray(obj.rejected_or_deprioritized)?obj.rejected_or_deprioritized:[];
+  if(!list.length && !rejectedList.length){
+    throw new Error('candidates / rejected_or_deprioritized のどちらもありません。');
+  }
 
   const siteId=skeGetSetting_('siteId');
   const siteName=skeGetSetting_('siteName');
   const articleRows=skeArticleMasterRequired_();
   const sh=skeSheet_(SKE_CONFIG.sheets.candidates);
-  const existingIds=new Set(skeReadObjects_(SKE_CONFIG.sheets.candidates).map(r=>String(r['Candidate ID']||'')));
-  const out=[];
-  let writer=0,doctor=0;
+
+  // Existing Candidate ID -> sheet row.
+  // v0.3.1 silently skipped duplicates. v0.3.2 updates them instead.
+  const existingRows={};
+  if(sh.getLastRow()>=2){
+    const vals=sh.getDataRange().getValues();
+    const h=vals[0].map(String);
+    const idCol=h.indexOf('Candidate ID');
+    if(idCol>=0){
+      for(let i=1;i<vals.length;i++){
+        const id=String(vals[i][idCol]||'');
+        if(id) existingRows[id]=i+1;
+      }
+    }
+  }
+
+  let imported=0,updated=0,writer=0,doctor=0,invalid=0;
+  const processedIds=new Set();
 
   list.slice(0,8).forEach(c=>{
-    const q=String(c.primary_query||'').trim();
-    if(!q)return;
+    const q=String(c&&c.primary_query||'').trim();
+    if(!q){ invalid++; return; }
+
     const cid=skeCandidateId_(siteId,q);
-    if(existingIds.has(cid))return;
+    // Do not process the exact same candidate twice inside one Doctor JSON.
+    if(processedIds.has(cid)) return;
+    processedIds.add(cid);
 
     const owned=skeOwnedQueryAssessment_(q,[],articleRows);
-    let existing='VERIFIED_NO_STRONG_OWNER',decision='DOCTOR_REVIEW',status='DISCOVERED',relatedId='';
+    let existing='VERIFIED_NO_STRONG_OWNER';
+    let decision='DOCTOR_REVIEW';
+    let status='DISCOVERED';
+    let relatedId='';
     let reason=String(c.rationale_ja||'');
+
     if(owned&&owned.score>=.62){
-      existing='EXISTING_ARTICLE_FOUND';decision='WRITER_REDIRECT';status='WRITER_REDIRECT';relatedId=owned.articleId||'';writer++;
+      existing='EXISTING_ARTICLE_FOUND';
+      decision='WRITER_REDIRECT';
+      status='WRITER_REDIRECT';
+      relatedId=owned.articleId||'';
+      writer++;
       reason+=' / SKE判定: 既存記事が強く担当しているため新記事ではなく既存記事改善を優先。';
     }else{
-      if(owned&&owned.score>=.42){existing='POSSIBLE_OVERLAP';relatedId=owned.articleId||'';}
+      if(owned&&owned.score>=.42){
+        existing='POSSIBLE_OVERLAP';
+        relatedId=owned.articleId||'';
+      }
       doctor++;
       reason+=' / SKE判定: 外部変化候補。最終的な記事化可否はDoctor精密判定へ。';
     }
@@ -745,51 +786,105 @@ function skeImportExternalDoctorResult(text){
     const life=String(c.article_lifespan||'UNKNOWN').toUpperCase();
     const siteFit=Number(c.site_fit_score||0);
     const conf=Number(c.confidence_pct||0);
-    const gap=String(c.serp_gap||'UNKNOWN');
+    const gap=String(c.serp_gap||'UNKNOWN').toUpperCase();
+
+    const gapScore=
+      (gap==='STRONG_GAP'||gap==='STRONG') ? 18 :
+      (gap==='MODERATE_GAP'||gap==='MODERATE') ? 12 : 6;
+
     const score=Math.max(0,Math.min(100,Math.round(
       (siteFit>20?siteFit/5:siteFit)*3 +
       (conf*0.35) +
       (demand==='OBSERVED'?20:demand==='EMERGING'?14:8) +
-      (gap==='STRONG_GAP'?18:gap==='MODERATE_GAP'?12:6)
+      gapScore
     )));
 
-    out.push([
-      false,cid,siteId,siteName,q,'EXTERNAL_WEB',score,demand,life,existing,relatedId,owned?String(owned.url||''):'',
-      decision,status,0,0,0,0,reason,'','', '', '', '', new Date()
-    ]);
+    const candidateRow=[
+      false,cid,siteId,siteName,q,'EXTERNAL_WEB',score,demand,life,existing,relatedId,
+      owned?String(owned.url||''):'',
+      decision,status,0,0,0,0,reason,'','','','','',new Date()
+    ];
+
+    if(existingRows[cid]){
+      // Preserve user/progress fields: checkbox, Doctor final result, recheck date, published identity.
+      const rowNo=existingRows[cid];
+      const oldRow=sh.getRange(rowNo,1,1,SKE_CONFIG.candidateHeaders.length).getValues()[0];
+      candidateRow[0]=oldRow[0];
+      for(let i=19;i<=23;i++) candidateRow[i]=oldRow[i];
+      sh.getRange(rowNo,1,1,SKE_CONFIG.candidateHeaders.length).setValues([candidateRow]);
+      updated++;
+    }else{
+      sh.getRange(sh.getLastRow()+1,1,1,SKE_CONFIG.candidateHeaders.length).setValues([candidateRow]);
+      existingRows[cid]=sh.getLastRow();
+      imported++;
+    }
   });
 
-  if(out.length){
-    sh.getRange(sh.getLastRow()+1,1,out.length,SKE_CONFIG.candidateHeaders.length).setValues(out);
+  if(sh.getLastRow()>=2){
     sh.getRange(2,1,sh.getLastRow()-1,1).insertCheckboxes();
   }
   skeFormatCandidates_();
   skeRenderHome();
 
   const raw=skeSheet_(SKE_CONFIG.sheets.externalResults);
-  raw.appendRow([String(obj.package_id||skeGetSetting_('lastExternalPackageId')||''),String(text||''),new Date()]);
+  raw.appendRow([
+    String(obj.package_id||skeGetSetting_('lastExternalPackageId')||''),
+    String(text||''),
+    new Date()
+  ]);
 
-  // Update external rows if source_explore_id can be mapped.
-  const counts={};
+  // Update External Discovery rows:
+  // candidates -> DOCTOR_IMPORTED
+  // rejected/deprioritized -> DOCTOR_REJECTED
+  const candidateCounts={};
   list.forEach(c=>{
-    const k=String(c.source_explore_id||'');
-    if(k)counts[k]=(counts[k]||0)+1;
+    const k=String(c&&c.source_explore_id||'');
+    if(k) candidateCounts[k]=(candidateCounts[k]||0)+1;
   });
+  const rejectedMap={};
+  rejectedList.forEach(r=>{
+    const k=String(r&&r.source_explore_id||'');
+    if(k) rejectedMap[k]=String(r.reason||'REJECTED');
+  });
+
   const ext=skeSheet_(SKE_CONFIG.sheets.external);
   if(ext.getLastRow()>=2){
-    const vals=ext.getDataRange().getValues(), h=vals[0].map(String), ix={};h.forEach((x,i)=>ix[x]=i);
+    const vals=ext.getDataRange().getValues();
+    const h=vals[0].map(String),ix={};
+    h.forEach((x,i)=>ix[x]=i);
+
     for(let i=1;i<vals.length;i++){
       const id=String(vals[i][ix['Explore ID']]||'');
-      if(counts[id]){
+      if(candidateCounts[id]){
         ext.getRange(i+1,ix['状態']+1).setValue('DOCTOR_IMPORTED');
-        ext.getRange(i+1,ix['Doctor候補数']+1).setValue(counts[id]);
+        ext.getRange(i+1,ix['Doctor候補数']+1).setValue(candidateCounts[id]);
+        ext.getRange(i+1,ix['更新日時']+1).setValue(new Date());
+      }else if(rejectedMap[id]){
+        ext.getRange(i+1,ix['状態']+1).setValue('DOCTOR_REJECTED');
+        ext.getRange(i+1,ix['Doctor候補数']+1).setValue(0);
         ext.getRange(i+1,ix['更新日時']+1).setValue(new Date());
       }
     }
   }
 
+  const processed=imported+updated;
   skeOpenCandidates();
-  return {imported:out.length,writer:writer,doctor:doctor};
+
+  // If Doctor returned a candidate but none was processed, surface a real error
+  // instead of displaying a misleading all-zero success dialog.
+  if(list.length && processed===0 && invalid>=list.length){
+    throw new Error('Doctor候補は受信しましたが、Primary Queryを読み取れず候補台帳へ登録できませんでした。');
+  }
+
+  return {
+    processed:processed,
+    imported:imported,
+    updated:updated,
+    writer:writer,
+    doctor:doctor,
+    rejected:rejectedList.length,
+    invalid:invalid
+  };
 }
 
 function skeExtractJsonObject_(text){
@@ -964,7 +1059,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.1',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.2',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},

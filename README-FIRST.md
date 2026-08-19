@@ -1,22 +1,30 @@
-# SIMS Keyword Explorer v0.3.1
+# SIMS Keyword Explorer v0.3.2
 
-## Purpose
-SBMの現行「記事一覧」を、加工せずSKE Article Masterへ取り込めるようにします。
+## Fix
+v0.3.1 Doctor external result import could show:
+- 外部候補 0
+- Writer振替 0
+- Doctor候補 0
 
-## Main changes
-- Added: 追加の操作 → SBM記事一覧からArticle Masterを取り込む
-- SBMのコピー＆ペースト（TSV）を自動解析
-- 必須項目を以下の3つに変更
-  - 記事URL
-  - 記事タイトル / H1タイトル
-  - メインクエリ
-- 任意項目
-  - ArticleID
-  - SearchIntent
-  - 状態 / 作業状態
-- 不要列（記事ランク、クリック、表示回数、CTR、掲載順位、更新日など）は自動無視
-- ArticleIDが無い場合はURLからSKE内部IDを生成
-- 外部探索結果のカニバリ判定で関連URLをCandidate Registryへ保存
+when the same Candidate ID already existed in Candidate Registry.
+
+The previous code silently skipped duplicate Candidate IDs.
+
+## v0.3.2 behavior
+- New candidate -> add
+- Existing same Candidate ID -> update in place
+- Preserve progress fields:
+  - selection
+  - Doctor final verdict/confidence
+  - recheck date
+  - published ArticleID / URL
+- Show new vs updated counts
+- Show Doctor rejected/deprioritized count
+- Mark external themes:
+  - DOCTOR_IMPORTED
+  - DOCTOR_REJECTED
+- Accept SERP gap values MODERATE / STRONG in addition to MODERATE_GAP / STRONG_GAP
+- Never silently return an unexplained all-zero result when Doctor actually supplied a candidate
 
 ## Apps Script
 Replace:
@@ -25,9 +33,9 @@ Replace:
 Add:
 - none
 
-## Recommended workflow
-1. SBM → 記事一覧を開く
-2. 見出し行を含めて記事一覧をコピー
-3. SKE → 追加の操作 → SBM記事一覧からArticle Masterを取り込む
-4. 貼り付けて登録
-5. SKE → 6. Doctor外部探索結果を取り込む
+## Retest
+Paste the same Doctor external discovery result again.
+Expected for the current LINE Lab case:
+- Processed candidates: 1
+- Doctor rejected: 2
+- Candidate is either newly added or existing-updated

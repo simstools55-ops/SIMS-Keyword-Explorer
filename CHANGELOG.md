@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## v0.3.1
-- Added SBM article-list compatible Article Master import.
-- ArticleID and SearchIntent are now optional for cannibalization checks.
-- Minimum Article Master fields are URL, title/H1, and main query.
-- Generates deterministic internal ArticleID when SBM ArticleID is unavailable.
-- Preserves related URL when external discovery candidate overlaps an existing article.
+## v0.3.2
+- Fixed silent duplicate skip in Doctor external discovery result import.
+- Doctor imports are now idempotent: existing candidates are updated instead of discarded.
+- Added rejected/deprioritized tracking.
+- Improved import result diagnostics.
+- Added MODERATE/STRONG SERP gap aliases.
