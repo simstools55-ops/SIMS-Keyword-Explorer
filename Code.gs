@@ -1,11 +1,13 @@
 /**
- * SIMS Keyword Explorer v0.1.2
+ * SIMS Keyword Explorer v0.1.3
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
  * - Select/import one site's Collector Evidence ZIP
  * - Analyze page/query evidence
  * - Optional Article Master matching
+ * - Cluster query intent before Candidate Registry
+ * - Candidate Gate: max 10 practical candidates / max 3 Doctor candidates
  * - Build Candidate Registry
  * - Generate Doctor referral ZIPs with user-recognizable names
  *
@@ -15,7 +17,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.1.2';
+const SKE_VERSION = '0.1.3';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -249,60 +251,285 @@ function skeRunInternalDiscovery() {
   skeSetup_();
   const siteId=skeGetSetting_('siteId');
   if(!siteId) throw new Error('先に「2. Evidenceを読み込む」を実行してください。');
+
   const qRows=skeReadObjects_(SKE_CONFIG.sheets.pageQuery);
   if(!qRows.length) throw new Error('page_query_top Evidenceがありません。');
-  const articleMap=skeBuildArticleMasterMap_();
-  const grouped={};
+
+  const articleRows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster);
+  const rawGroups={};
+
+  // 1) Query単位にEvidenceを集約
   qRows.forEach(r=>{
-    const q=String(skeObj_(r,['query','クエリ'])||'').trim(); const nq=skeNormalizeQuery_(q);
+    const q=String(skeObj_(r,['query','クエリ'])||'').trim();
+    const nq=skeNormalizeQuery_(q);
     const url=skeNormalizeUrl_(skeObj_(r,['page','url','URL'])||'');
     if(!q||!nq||!url) return;
-    const g=grouped[nq]||(grouped[nq]={query:q,urls:{},clicks:0,impressions:0,posNum:0,posDen:0});
-    const imp=Number(skeObj_(r,['impressions','表示回数'])||0), clk=Number(skeObj_(r,['clicks','クリック数'])||0), pos=Number(skeObj_(r,['position','掲載順位','平均掲載順位'])||0);
-    g.clicks+=clk; g.impressions+=imp; if(pos>0&&imp>0){g.posNum+=pos*imp;g.posDen+=imp;}
-    const u=g.urls[url]||(g.urls[url]={url,impressions:0,clicks:0,position:0}); u.impressions+=imp;u.clicks+=clk; if(pos>0)u.position=pos;
+
+    const g=rawGroups[nq]||(rawGroups[nq]={
+      query:q, normalized:nq, urls:{}, clicks:0, impressions:0, posNum:0, posDen:0
+    });
+    const imp=Number(skeObj_(r,['impressions','表示回数'])||0);
+    const clk=Number(skeObj_(r,['clicks','クリック数'])||0);
+    const pos=Number(skeObj_(r,['position','掲載順位','平均掲載順位'])||0);
+
+    g.clicks+=clk;
+    g.impressions+=imp;
+    if(pos>0&&imp>0){ g.posNum+=pos*imp; g.posDen+=imp; }
+
+    const u=g.urls[url]||(g.urls[url]={url:url,impressions:0,clicks:0,posNum:0,posDen:0});
+    u.impressions+=imp;
+    u.clicks+=clk;
+    if(pos>0&&imp>0){ u.posNum+=pos*imp; u.posDen+=imp; }
   });
-  const all=Object.values(grouped).filter(g=>g.impressions>=3).sort((a,b)=>b.impressions-a.impressions);
-  const maxImp=Math.max(1,...all.map(x=>x.impressions));
-  const existingIds=new Set(skeReadObjects_(SKE_CONFIG.sheets.candidates).map(r=>String(r['Candidate ID']||'')));
-  const out=[];
-  all.slice(0,250).forEach(g=>{
-    const urls=Object.values(g.urls).sort((a,b)=>b.impressions-a.impressions);
-    const primaryUrl=urls[0] ? urls[0].url : '';
-    const master=articleMap[primaryUrl]||null;
-    const urlCount=urls.length;
-    let existing='POSSIBLE_OVERLAP', decision='DOCTOR_REVIEW', status='DISCOVERED', relatedId='', reason='';
-    if(urlCount>=2){
-      existing='POSSIBLE_OVERLAP'; decision='WRITER_REDIRECT'; status='WRITER_REDIRECT'; reason='同じ検索意図が複数URLに分散しているため、新記事より既存記事整理を優先。';
-    } else if(master){
-      relatedId=master.articleId||'';
-      const sim=Math.max(skeQuerySimilarity_(g.query,master.mainQuery||''),skeTitleQueryCoverage_(master.title||'',g.query));
-      if(sim>=0.70){ existing='EXISTING_ARTICLE_FOUND'; decision='WRITER_REDIRECT'; status='WRITER_REDIRECT'; reason='既存記事がこの検索意図を強く担当している可能性が高い。'; }
-      else if(sim<0.40){ existing='VERIFIED_NO_CONFLICT'; decision='DOCTOR_REVIEW'; reason='実表示がある一方、既存記事の主題との一致が弱く、専用記事の余地をDoctorで確認する価値がある。'; }
-      else { existing='POSSIBLE_OVERLAP'; decision='DOCTOR_REVIEW'; reason='近い既存記事があるため、独立記事化の可否をDoctorで確認。'; }
-    } else {
-      existing='POSSIBLE_OVERLAP'; decision='DOCTOR_REVIEW'; reason='Article Master未確認のため重複判定は保留。Doctor診断前に既存記事情報の確認を推奨。';
+
+  const raw=Object.values(rawGroups)
+    .filter(g=>g.impressions>=3)
+    .sort((a,b)=>b.impressions-a.impressions);
+
+  // 2) 同一検索意図を先にCluster化
+  const clusters=[];
+  raw.forEach(g=>{
+    let best=null, bestSim=0;
+    for(let i=0;i<clusters.length;i++){
+      const sim=skeClusterSimilarity_(g.query,clusters[i].primaryQuery);
+      if(sim>bestSim){ bestSim=sim; best=clusters[i]; }
     }
-    const maturity=g.impressions>=50?'OBSERVED':g.impressions>=10?'EMERGING':'PREDICTED';
-    const demand=Math.min(25,Math.round(25*Math.log1p(g.impressions)/Math.log1p(maxImp)));
-    const pos=g.posDen?g.posNum/g.posDen:0;
-    const posScore=pos>0&&pos<=20?20:pos<=40?12:6;
-    const fit=master?18:12;
-    const gapProxy=existing==='VERIFIED_NO_CONFLICT'?18:existing==='POSSIBLE_OVERLAP'?10:4;
-    let score=Math.max(0,Math.min(100,demand+posScore+fit+gapProxy+10));
-    if(decision==='WRITER_REDIRECT')score=Math.min(score,74);
-    if(score<50 && decision==='DOCTOR_REVIEW'){decision='DROP';status='BLOCK';reason+=' P1 Scoreが低いため初版では候補外。';}
-    const cid=skeCandidateId_(siteId,g.query);
-    if(existingIds.has(cid)) return;
-    out.push([false,cid,siteId,skeGetSetting_('siteName'),g.query,'INTERNAL_GSC',score,maturity,'UNKNOWN',existing,relatedId,urls.map(x=>x.url).join('\n'),decision,status,g.impressions,g.clicks,pos,urlCount,reason,'','', '', '', '', new Date()]);
+    if(best && bestSim>=0.72){
+      best.members.push(g);
+      best.impressions+=g.impressions;
+      best.clicks+=g.clicks;
+      best.posNum+=g.posNum;
+      best.posDen+=g.posDen;
+      Object.keys(g.urls).forEach(url=>{
+        const src=g.urls[url];
+        const dst=best.urls[url]||(best.urls[url]={url:url,impressions:0,clicks:0,posNum:0,posDen:0});
+        dst.impressions+=src.impressions;
+        dst.clicks+=src.clicks;
+        dst.posNum+=src.posNum;
+        dst.posDen+=src.posDen;
+      });
+      if(g.impressions>best.primaryImpressions){
+        best.primaryQuery=g.query;
+        best.primaryImpressions=g.impressions;
+      }
+    } else {
+      clusters.push({
+        primaryQuery:g.query,
+        primaryImpressions:g.impressions,
+        members:[g],
+        urls:Object.assign({},g.urls),
+        clicks:g.clicks,
+        impressions:g.impressions,
+        posNum:g.posNum,
+        posDen:g.posDen
+      });
+    }
   });
+
+  const maxImp=Math.max(1,...clusters.map(x=>x.impressions));
+  const evaluated=[];
+
+  // 3) Existing Article Gate → 4) Candidate Score
+  clusters.forEach(c=>{
+    const urls=Object.values(c.urls).sort((a,b)=>b.impressions-a.impressions);
+    const urlCount=urls.length;
+    const primaryUrl=urls[0]?urls[0].url:'';
+    const match=skeFindBestArticleMatch_(c.primaryQuery,primaryUrl,articleRows);
+
+    let existing='POSSIBLE_OVERLAP';
+    let decision='DOCTOR_REVIEW';
+    let status='DISCOVERED';
+    let relatedId='';
+    let reason='';
+
+    if(match && match.score>=0.72){
+      existing='EXISTING_ARTICLE_FOUND';
+      decision='WRITER_REDIRECT';
+      status='WRITER_REDIRECT';
+      relatedId=match.articleId||'';
+      reason='既存記事がこの検索意図を強く担当しているため、新記事より既存記事改善を優先。';
+    } else if(urlCount>=2){
+      existing='POSSIBLE_OVERLAP';
+      decision='WRITER_REDIRECT';
+      status='WRITER_REDIRECT';
+      relatedId=match?match.articleId||'':'';
+      reason='同じ検索意図が複数URLに分散しているため、新記事より既存記事整理を優先。';
+    } else if(match && match.score>=0.42){
+      existing='POSSIBLE_OVERLAP';
+      decision='DOCTOR_REVIEW';
+      relatedId=match.articleId||'';
+      reason='近い既存記事があるため、独立記事化できるかDoctorで確認。';
+    } else if(articleRows.length){
+      existing='VERIFIED_NO_CONFLICT';
+      decision='DOCTOR_REVIEW';
+      reason='Article Master照合では強い重複が見つからず、専用記事の余地をDoctorで確認する価値がある。';
+    } else {
+      existing='POSSIBLE_OVERLAP';
+      decision='DOCTOR_REVIEW';
+      reason='Article Master未登録のため既存記事との重複判定は未確定。';
+    }
+
+    const maturity=c.impressions>=50?'OBSERVED':c.impressions>=10?'EMERGING':'PREDICTED';
+    const demand=Math.min(25,Math.round(25*Math.log1p(c.impressions)/Math.log1p(maxImp)));
+    const pos=c.posDen?c.posNum/c.posDen:0;
+    const posScore=pos>0&&pos<=20?20:pos>20&&pos<=40?12:6;
+    const fit=match&&match.score>=0.42?18:12;
+    const gapProxy=existing==='VERIFIED_NO_CONFLICT'?18:existing==='POSSIBLE_OVERLAP'?10:4;
+    const clusterBonus=Math.min(8,Math.max(0,c.members.length-1)*2);
+    let score=Math.max(0,Math.min(100,demand+posScore+fit+gapProxy+10+clusterBonus));
+
+    if(decision==='WRITER_REDIRECT') score=Math.min(score,74);
+    if(score<50 && decision==='DOCTOR_REVIEW'){
+      decision='DROP';
+      status='BLOCK';
+      reason+=' P1 Scoreが低いため候補外。';
+    }
+
+    const variants=c.members
+      .slice()
+      .sort((a,b)=>b.impressions-a.impressions)
+      .map(x=>x.query)
+      .filter((x,i,a)=>a.indexOf(x)===i)
+      .slice(0,5);
+
+    if(variants.length>1){
+      reason+=' 同一意図Cluster: '+variants.join(' / ');
+    }
+
+    evaluated.push({
+      query:c.primaryQuery,
+      score:score,
+      maturity:maturity,
+      existing:existing,
+      decision:decision,
+      status:status,
+      relatedId:relatedId,
+      urls:urls,
+      impressions:c.impressions,
+      clicks:c.clicks,
+      pos:pos,
+      urlCount:urlCount,
+      reason:reason
+    });
+  });
+
+  // 5) Candidate Gate: 実用候補 最大10件 / Doctor候補 最大3件
+  evaluated.sort((a,b)=>{
+    const rank=x=>x.decision==='DOCTOR_REVIEW'?0:x.decision==='WRITER_REDIRECT'?1:2;
+    return rank(a)-rank(b) || b.score-a.score || b.impressions-a.impressions;
+  });
+
+  const picked=[];
+  let doctorCount=0;
+  for(let i=0;i<evaluated.length && picked.length<10;i++){
+    const e=evaluated[i];
+    if(e.decision==='DROP') continue;
+    if(e.decision==='DOCTOR_REVIEW'){
+      if(doctorCount>=3) continue;
+      doctorCount++;
+    }
+    picked.push(e);
+  }
+
+  // 同じサイトの未処置P1候補は再探索結果で置換。Doctor回答済み/公開済みは保持。
+  skeRemoveRegeneratableCandidates_(siteId);
+
+  const out=picked.map(e=>{
+    const cid=skeCandidateId_(siteId,e.query);
+    return [
+      false,cid,siteId,skeGetSetting_('siteName'),e.query,'INTERNAL_GSC',
+      e.score,e.maturity,'UNKNOWN',e.existing,e.relatedId,
+      e.urls.slice(0,3).map(x=>x.url).join('\n'),
+      e.decision,e.status,e.impressions,e.clicks,e.pos,e.urlCount,e.reason,
+      '','','','','',new Date()
+    ];
+  });
+
   const sh=skeSheet_(SKE_CONFIG.sheets.candidates);
-  if(out.length) {
+  if(out.length){
     sh.getRange(sh.getLastRow()+1,1,out.length,SKE_CONFIG.candidateHeaders.length).setValues(out);
     sh.getRange(2,1,sh.getLastRow()-1,1).insertCheckboxes();
   }
-  skeFormatCandidates_(); skeRenderHome();
-  SpreadsheetApp.getUi().alert(`内部探索が完了しました。\n新規候補：${out.length}件\n\n「4. 候補を確認する」で内容を確認してください。`);
+
+  skeFormatCandidates_();
+  skeRenderHome();
+
+  const writerCount=out.filter(r=>String(r[12])==='WRITER_REDIRECT').length;
+  SpreadsheetApp.getUi().alert(
+    '内部探索が完了しました。\n\n' +
+    `実用候補：${out.length}件（最大10件）\n` +
+    `Doctor診断候補：${doctorCount}件（最大3件）\n` +
+    `既存記事改善候補：${writerCount}件\n\n` +
+    '「4. 候補を確認する」で内容を確認してください。'
+  );
+}
+
+function skeClusterSimilarity_(a,b){
+  const na=skeNormalizeQuery_(a), nb=skeNormalizeQuery_(b);
+  if(!na||!nb) return 0;
+  if(na===nb) return 1;
+  if(na.indexOf(nb)>=0||nb.indexOf(na)>=0) return .88;
+
+  const ta=skeQueryTokens_(na), tb=skeQueryTokens_(nb);
+  if(!ta.length||!tb.length) return 0;
+
+  const sa={}; ta.forEach(x=>sa[x]=1);
+  const sb={}; tb.forEach(x=>sb[x]=1);
+  let common=0;
+  Object.keys(sa).forEach(x=>{if(sb[x])common++;});
+  const union={}; ta.concat(tb).forEach(x=>union[x]=1);
+  const jaccard=common/Math.max(Object.keys(union).length,1);
+
+  // 長いエラー文など、語尾だけ違う派生Queryをまとめやすくする
+  const prefix=(na.slice(0,32)===nb.slice(0,32))?0.18:0;
+  return Math.min(1,jaccard+prefix);
+}
+
+function skeFindBestArticleMatch_(query,primaryUrl,articleRows){
+  let best=null;
+  articleRows.forEach(r=>{
+    const url=skeNormalizeUrl_(skeObj_(r,['記事URL','URL','url'])||'');
+    if(!url) return;
+    const title=String(skeObj_(r,['記事タイトル','タイトル','title'])||'');
+    const mainQuery=String(skeObj_(r,['メインクエリ','Main Query','main_query'])||'');
+    const articleId=String(skeObj_(r,['ArticleID','記事ID','article_id'])||'');
+
+    let score=Math.max(
+      skeQuerySimilarity_(query,mainQuery),
+      skeTitleQueryCoverage_(title,query)
+    );
+    if(primaryUrl && url===primaryUrl) score=Math.max(score,.55);
+
+    if(!best || score>best.score){
+      best={score:score,url:url,title:title,mainQuery:mainQuery,articleId:articleId};
+    }
+  });
+  return best;
+}
+
+function skeRemoveRegeneratableCandidates_(siteId){
+  const sh=skeSheet_(SKE_CONFIG.sheets.candidates);
+  if(sh.getLastRow()<2) return;
+
+  const vals=sh.getDataRange().getValues();
+  const h=vals[0].map(String), ix={};
+  h.forEach((x,i)=>ix[x]=i);
+
+  const keep=[vals[0]];
+  for(let r=1;r<vals.length;r++){
+    const row=vals[r];
+    const sameSite=String(row[ix['SiteID']]||'')===String(siteId);
+    const doctorDone=String(row[ix['Doctor判定']]||'').trim()!=='';
+    const published=String(row[ix['公開ArticleID']]||'').trim()!=='' || String(row[ix['公開URL']]||'').trim()!=='';
+    const state=String(row[ix['状態']]||'');
+    const regeneratable=sameSite && !doctorDone && !published &&
+      ['DISCOVERED','WRITER_REDIRECT','BLOCK'].indexOf(state)>=0;
+
+    if(!regeneratable) keep.push(row);
+  }
+
+  sh.clearContents();
+  sh.getRange(1,1,keep.length,keep[0].length).setValues(keep);
 }
 
 function skeOpenCandidates(){ const sh=skeSheet_(SKE_CONFIG.sheets.candidates); SpreadsheetApp.getActive().setActiveSheet(sh); }
@@ -327,7 +554,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.2',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.3',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -370,11 +597,37 @@ function skeBuildArticleMasterMap_(){
 }
 
 function skeFormatCandidates_(){
-  const sh=skeSheet_(SKE_CONFIG.sheets.candidates); if(sh.getLastRow()<2)return;
-  sh.setFrozenRows(1); sh.getRange(1,1,1,SKE_CONFIG.candidateHeaders.length).setFontWeight('bold').setWrap(true);
-  sh.getRange(2,1,sh.getLastRow()-1,SKE_CONFIG.candidateHeaders.length).setVerticalAlignment('top');
-  [5,12,19].forEach(c=>sh.getRange(2,c,sh.getLastRow()-1,1).setWrap(true));
-  sh.autoResizeColumns(1,SKE_CONFIG.candidateHeaders.length); sh.setColumnWidth(5,260);sh.setColumnWidth(12,300);sh.setColumnWidth(19,360);
+  const sh=skeSheet_(SKE_CONFIG.sheets.candidates);
+  if(sh.getLastRow()<1)return;
+
+  sh.setFrozenRows(1);
+  sh.getRange(1,1,1,SKE_CONFIG.candidateHeaders.length)
+    .setFontWeight('bold').setWrap(true);
+  if(sh.getLastRow()>=2){
+    sh.getRange(2,1,sh.getLastRow()-1,SKE_CONFIG.candidateHeaders.length)
+      .setVerticalAlignment('top');
+    [5,12,19].forEach(c=>sh.getRange(2,c,sh.getLastRow()-1,1).setWrap(true));
+  }
+
+  sh.autoResizeColumns(1,SKE_CONFIG.candidateHeaders.length);
+  sh.setColumnWidth(1,55);
+  sh.setColumnWidth(4,120);
+  sh.setColumnWidth(5,300);
+  sh.setColumnWidth(7,80);
+  sh.setColumnWidth(8,105);
+  sh.setColumnWidth(10,140);
+  sh.setColumnWidth(12,240);
+  sh.setColumnWidth(13,135);
+  sh.setColumnWidth(14,110);
+  sh.setColumnWidth(19,420);
+
+  // 利用者が通常判断に使わない内部列は非表示。データ自体は保持する。
+  const hiddenHeaders=['Candidate ID','SiteID','Discovery Type','記事寿命','関連ArticleID','URL数','更新日時'];
+  const header=SKE_CONFIG.candidateHeaders;
+  hiddenHeaders.forEach(name=>{
+    const col=header.indexOf(name)+1;
+    if(col>0) sh.hideColumns(col);
+  });
 }
 
 function skeNormalizeQuery_(q){return String(q||'').toLowerCase().replace(/[　\s]+/g,' ').replace(/[｜|／/・,，。!！?？:：;；()[\]【】「」『』]/g,' ').replace(/\s+/g,' ').trim();}
