@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.3.0
+ * SIMS Keyword Explorer v0.3.1
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -17,14 +17,15 @@
  * - Search Audience driven External Discovery themes
  * - Doctor External Discovery Package
  * - Doctor result import (full answer or JSON)
- * - Article Master cannibalization gate before Candidate Registry
+ * - SBM article-list compatible Article Master import
+ * - Article Master cannibalization gate before Candidate Registry (SBM-compatible)
  *
  * Not included:
  * - Direct web crawling from Apps Script
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.3.0';
+const SKE_VERSION = '0.3.1';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -74,6 +75,7 @@ function skeBuildMenu_() {
       .addItem('検索オーディエンスを確認', 'skeOpenPersonaProfile')
       .addItem('外部探索テーマを確認', 'skeOpenExternalDiscovery')
       .addItem('内部GSC候補を探す', 'skeRunInternalDiscovery')
+      .addItem('SBM記事一覧からArticle Masterを取り込む', 'skeImportArticleMasterFromSbmPrompt')
       .addItem('Article Masterの使い方', 'skeArticleMasterHelp')
       .addItem('選択候補のDoctor用ZIPを作る', 'skeGenerateDoctorPackageForSelected')
       .addItem('Homeを更新', 'skeRenderHome'))
@@ -428,9 +430,18 @@ function skeBuildPersonaProfile_(qRows){
 }
 
 function skeArticleMasterRequired_(){
-  const rows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster);
+  const rows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster).filter(r=>{
+    const url=String(skeObj_(r,['記事URL','URL','url'])||'').trim();
+    const title=String(skeObj_(r,['記事タイトル','H1タイトル','タイトル','title'])||'').trim();
+    const mq=String(skeObj_(r,['メインクエリ','Main Query','main_query'])||'').trim();
+    return url && title && mq;
+  });
   if(!rows.length){
-    throw new Error('新記事候補のカニバリ防止のため、候補探索にはArticle Masterが必要です。検索オーディエンス分析はArticle Masterなしで利用できます。候補探索を続ける場合は「追加の操作 → Article Masterの使い方」を開いてください。');
+    throw new Error(
+      '新記事候補のカニバリ防止のため、候補探索にはArticle Masterが必要です。\\n'+
+      '必須項目は「記事URL・記事タイトル（H1タイトル可）・メインクエリ」です。\\n'+
+      'SKE → 追加の操作 → 「SBM記事一覧からArticle Masterを取り込む」を実行してください。'
+    );
   }
   return rows;
 }
@@ -440,10 +451,10 @@ function skeOwnedQueryAssessment_(query, urls, articleRows){
   articleRows.forEach(r=>{
     const url=skeNormalizeUrl_(skeObj_(r,['記事URL','URL','url'])||'');
     if(!url)return;
-    const title=String(skeObj_(r,['記事タイトル','タイトル','title'])||'');
+    const title=String(skeObj_(r,['記事タイトル','H1タイトル','タイトル','title'])||'');
     const mq=String(skeObj_(r,['メインクエリ','Main Query','main_query'])||'');
     const intent=String(skeObj_(r,['SearchIntent','検索意図'])||'');
-    const aid=String(skeObj_(r,['ArticleID','記事ID','article_id'])||'');
+    const aid=String(skeObj_(r,['ArticleID','記事ID','article_id'])||skeArticleIdFromUrl_(url));
     let sim=Math.max(skeQuerySimilarity_(query,mq),skeTitleQueryCoverage_(title,query),skeQuerySimilarity_(query,intent));
     const observed=(urls||[]).some(u=>skeNormalizeUrl_(u.url)===url);
     if(observed)sim=Math.max(sim,.58);
@@ -566,7 +577,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.3.0',
+    contract_version:'0.3.1',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -601,7 +612,8 @@ function skeGenerateExternalDiscoveryPackage(){
       ]
     },
     article_master_attached:articleRows.length>0,
-    next_stage_ja:'SKEへ結果を戻し、Article Masterでカニバリ判定後にCandidate Registryへ登録する。'
+    article_master_minimum_fields:['記事タイトル','記事URL','メインクエリ'],
+    next_stage_ja:'SKEへ結果を戻し、Article Master（記事URL・記事タイトル・メインクエリを必須、ArticleID/SearchIntentは任意）でカニバリ判定後にCandidate Registryへ登録する。'
   };
 
   const audienceCsv=[
@@ -742,7 +754,7 @@ function skeImportExternalDoctorResult(text){
     )));
 
     out.push([
-      false,cid,siteId,siteName,q,'EXTERNAL_WEB',score,demand,life,existing,relatedId,'',
+      false,cid,siteId,siteName,q,'EXTERNAL_WEB',score,demand,life,existing,relatedId,owned?String(owned.url||''):'',
       decision,status,0,0,0,0,reason,'','', '', '', '', new Date()
     ]);
   });
@@ -952,7 +964,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.0',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.3.1',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -983,14 +995,154 @@ function skeCandidateEvidenceCsv_(query){
   return vals.map(row=>row.map(skeCsvCell_).join(',')).join('\r\n');
 }
 
+
+function skeImportArticleMasterFromSbmPrompt(){
+  skeSetup_();
+  const html=HtmlService.createHtmlOutput(`<!doctype html><html><head><base target="_top"><style>
+    body{font-family:Arial,"Noto Sans JP",sans-serif;background:#f8fafd;color:#202124;margin:0;padding:18px}
+    h2{margin:0 0 8px}.hint{font-size:13px;color:#5f6368;line-height:1.6;margin-bottom:10px}
+    textarea{width:100%;height:330px;box-sizing:border-box;border:1px solid #dadce0;border-radius:8px;padding:10px;font-family:monospace;font-size:12px;white-space:pre}
+    .actions{text-align:right;margin-top:12px}button{padding:8px 14px;border-radius:6px;border:1px solid #dadce0;background:#fff;cursor:pointer}
+    .primary{background:#1a73e8;color:#fff;border-color:#1a73e8}.err{color:#b3261e;margin-top:8px;white-space:pre-wrap}
+  </style></head><body>
+    <h2>SBM記事一覧 → Article Master</h2>
+    <div class="hint">
+      SBMの「記事一覧」で、<b>見出し行を含めて</b>必要な範囲をコピーし、そのまま貼り付けてください。<br>
+      SKEは「記事URL / メインクエリ / H1タイトル（または記事タイトル）」を自動認識します。<br>
+      記事ランク・クリック数・表示回数・CTR・掲載順位などは自動で無視します。
+    </div>
+    <textarea id="text" placeholder="SBMの記事一覧をここへ貼り付け"></textarea>
+    <div id="err" class="err"></div>
+    <div class="actions">
+      <button onclick="google.script.host.close()">キャンセル</button>
+      <button class="primary" onclick="go()">Article Masterへ取り込む</button>
+    </div>
+    <script>
+      function go(){
+        const t=document.getElementById('text').value;
+        document.getElementById('err').textContent='';
+        google.script.run.withSuccessHandler(r=>{
+          alert('Article Master登録完了\\n登録: '+r.imported+'件\\n重複除外: '+r.duplicates+'件\\n除外: '+r.skipped+'件');
+          google.script.host.close();
+        }).withFailureHandler(e=>{
+          document.getElementById('err').textContent=e.message||e;
+        }).skeImportArticleMasterFromSbm(t);
+      }
+    </script></body></html>`).setWidth(760).setHeight(540);
+  SpreadsheetApp.getUi().showModalDialog(html,'SBM記事一覧からArticle Masterを取り込む');
+}
+
+function skeImportArticleMasterFromSbm(text){
+  const raw=String(text||'').replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim();
+  if(!raw) throw new Error('SBMの記事一覧を貼り付けてください。');
+
+  const lines=raw.split('\n').filter(x=>x.trim()!=='');
+  if(lines.length<2) throw new Error('見出し行を含む2行以上のデータを貼り付けてください。');
+
+  // Google Sheets copy/paste is TSV. CSV is accepted as a fallback.
+  let table=lines.map(line=>line.split('\t'));
+  if(table[0].length<2){
+    try{ table=Utilities.parseCsv(raw); }catch(e){}
+  }
+  if(!table.length || table[0].length<2) throw new Error('列を認識できません。SBMのシートから見出し行を含めてコピーしてください。');
+
+  const headers=table[0].map(x=>String(x||'').trim());
+  const findCol=aliases=>{
+    for(let a=0;a<aliases.length;a++){
+      const wanted=skeNormalizeHeader_(aliases[a]);
+      for(let i=0;i<headers.length;i++){
+        if(skeNormalizeHeader_(headers[i])===wanted) return i;
+      }
+    }
+    return -1;
+  };
+
+  const ix={
+    articleId:findCol(['ArticleID','記事ID']),
+    title:findCol(['記事タイトル','H1タイトル','タイトル']),
+    url:findCol(['記事URL','URL']),
+    mainQuery:findCol(['メインクエリ','Main Query']),
+    intent:findCol(['SearchIntent','検索意図']),
+    status:findCol(['状態','作業状態'])
+  };
+
+  const missing=[];
+  if(ix.url<0)missing.push('記事URL');
+  if(ix.title<0)missing.push('H1タイトル/記事タイトル');
+  if(ix.mainQuery<0)missing.push('メインクエリ');
+  if(missing.length){
+    throw new Error('必要な列を認識できません: '+missing.join(' / ')+'\\nSBM「記事一覧」の見出し行を含めてコピーしてください。');
+  }
+
+  const seen=new Set();
+  const rows=[];
+  let skipped=0,duplicates=0;
+
+  for(let r=1;r<table.length;r++){
+    const row=table[r];
+    const url=skeNormalizeUrl_(row[ix.url]||'');
+    const title=String(row[ix.title]||'').trim();
+    const mq=String(row[ix.mainQuery]||'').trim();
+    if(!url || !title || !mq){ skipped++; continue; }
+    if(seen.has(url)){ duplicates++; continue; }
+    seen.add(url);
+
+    const articleId=ix.articleId>=0 && String(row[ix.articleId]||'').trim()
+      ? String(row[ix.articleId]).trim()
+      : skeArticleIdFromUrl_(url);
+    const intent=ix.intent>=0 ? String(row[ix.intent]||'').trim() : '';
+    const status=ix.status>=0 ? String(row[ix.status]||'').trim() : '';
+
+    rows.push([articleId,title,url,mq,intent,status]);
+  }
+
+  if(!rows.length) throw new Error('登録できる記事がありませんでした。記事URL・H1タイトル・メインクエリが入っている行を確認してください。');
+
+  const sh=skeSheet_(SKE_CONFIG.sheets.articleMaster);
+  sh.clearContents();
+  sh.getRange(1,1,1,6).setValues([['ArticleID','記事タイトル','記事URL','メインクエリ','SearchIntent','状態']]);
+  sh.getRange(2,1,rows.length,6).setValues(rows);
+  sh.setFrozenRows(1);
+  sh.getRange(1,1,1,6).setFontWeight('bold');
+  sh.autoResizeColumns(1,6);
+
+  skeSetSetting_('articleMasterCount',String(rows.length));
+  skeSetSetting_('articleMasterImportedAt',new Date().toISOString());
+  skeSetSetting_('articleMasterSource','SBM_ARTICLE_LIST');
+
+  return {imported:rows.length,duplicates:duplicates,skipped:skipped};
+}
+
+function skeNormalizeHeader_(s){
+  return String(s||'').normalize('NFKC').toLowerCase().replace(/[\s　_\-・\/]/g,'').trim();
+}
+
+function skeArticleIdFromUrl_(url){
+  const u=skeNormalizeUrl_(url);
+  if(!u)return '';
+  const digest=Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,u);
+  const hex=digest.map(b=>('0'+((b<0?b+256:b).toString(16))).slice(-2)).join('').slice(0,10).toUpperCase();
+  return 'SKEART-'+hex;
+}
+
 function skeArticleMasterHelp(){
-  const sh=skeSheet_(SKE_CONFIG.sheets.articleMaster); if(sh.isSheetHidden())sh.showSheet(); SpreadsheetApp.getActive().setActiveSheet(sh);
-  SpreadsheetApp.getUi().alert('新記事候補探索ではArticle Masterが必須です。検索オーディエンス分析だけなら不要です。既存記事とのカニバリを避けるため、候補探索前に登録してください。\n\n列：ArticleID / 記事タイトル / 記事URL / メインクエリ / SearchIntent / 状態\n\nSBM等から取得できる記事情報を2行目以降へ貼り付けてください。');
+  const sh=skeSheet_(SKE_CONFIG.sheets.articleMaster);
+  if(sh.isSheetHidden())sh.showSheet();
+  SpreadsheetApp.getActive().setActiveSheet(sh);
+  SpreadsheetApp.getUi().alert(
+    'Article Masterは、新記事候補のカニバリ防止に使用します。\n\n'+
+    '必須：記事URL / 記事タイトル（H1タイトルでも可）/ メインクエリ\n'+
+    '任意：ArticleID / SearchIntent / 状態\n\n'+
+    '推奨操作：\n'+
+    'SBMの「記事一覧」で見出し行を含めてコピーし、\n'+
+    'SKE → 追加の操作 → 「SBM記事一覧からArticle Masterを取り込む」へ貼り付けてください。\n\n'+
+    'クリック数・表示回数・CTR・掲載順位など不要列はSKEが自動で無視します。'
+  );
 }
 
 function skeBuildArticleMasterMap_(){
   const rows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster), map={};
-  rows.forEach(r=>{const url=skeNormalizeUrl_(skeObj_(r,['記事URL','URL','url'])||'');if(!url)return;map[url]={articleId:String(skeObj_(r,['ArticleID','記事ID','article_id'])||''),title:String(skeObj_(r,['記事タイトル','タイトル','title'])||''),mainQuery:String(skeObj_(r,['メインクエリ','Main Query','main_query'])||''),searchIntent:String(skeObj_(r,['SearchIntent','検索意図'])||'')};});
+  rows.forEach(r=>{const url=skeNormalizeUrl_(skeObj_(r,['記事URL','URL','url'])||'');if(!url)return;map[url]={articleId:String(skeObj_(r,['ArticleID','記事ID','article_id'])||skeArticleIdFromUrl_(url)),title:String(skeObj_(r,['記事タイトル','H1タイトル','タイトル','title'])||''),mainQuery:String(skeObj_(r,['メインクエリ','Main Query','main_query'])||''),searchIntent:String(skeObj_(r,['SearchIntent','検索意図'])||'')};});
   return map;
 }
 

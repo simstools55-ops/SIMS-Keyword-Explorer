@@ -1,40 +1,22 @@
-# SIMS Keyword Explorer v0.3.0
+# SIMS Keyword Explorer v0.3.1
 
-## Major feature: External Discovery
+## Purpose
+SBMの現行「記事一覧」を、加工せずSKE Article Masterへ取り込めるようにします。
 
-Search Audience Profileを使い、
-「このブログに来る検索者が次に困りそうな新しい外部変化」を
-SIMS DoctorのWeb検索へ渡すルートを実装しました。
-
-## Main workflow
-1. 初期設定
-2. Evidenceを読み込む
-3. 検索オーディエンスを分析する
-4. 外部探索テーマを作る
-5. 外部探索Packageを作る
-6. Doctor外部探索結果を取り込む
-7. 候補を確認する
-8. 処置を進める
-
-## External Discovery Package
-Example:
-SKE-ガジェット探検記-外部探索-YYYYMMDD-HHmm.zip
-
-Contents:
-- external_discovery_request.json
-- search_audience_profile.csv
-- article_master.csv (when available)
-- README-FIRST.md
-
-## Doctor result import
-Doctorの回答全文またはJSONを貼り付け可能。
-Required format:
-SIMS_DOCTOR_EXTERNAL_DISCOVERY_RESULT_V1
-
-SKE側でArticle Masterと照合し、
-- existing owner strong -> WRITER_REDIRECT
-- no strong owner -> DOCTOR_REVIEW
-へ振り分けます。
+## Main changes
+- Added: 追加の操作 → SBM記事一覧からArticle Masterを取り込む
+- SBMのコピー＆ペースト（TSV）を自動解析
+- 必須項目を以下の3つに変更
+  - 記事URL
+  - 記事タイトル / H1タイトル
+  - メインクエリ
+- 任意項目
+  - ArticleID
+  - SearchIntent
+  - 状態 / 作業状態
+- 不要列（記事ランク、クリック、表示回数、CTR、掲載順位、更新日など）は自動無視
+- ArticleIDが無い場合はURLからSKE内部IDを生成
+- 外部探索結果のカニバリ判定で関連URLをCandidate Registryへ保存
 
 ## Apps Script
 Replace:
@@ -43,6 +25,9 @@ Replace:
 Add:
 - none
 
-New spreadsheet sheets are created automatically:
-- 外部探索
-- _SKE_EXTERNAL_RESULTS
+## Recommended workflow
+1. SBM → 記事一覧を開く
+2. 見出し行を含めて記事一覧をコピー
+3. SKE → 追加の操作 → SBM記事一覧からArticle Masterを取り込む
+4. 貼り付けて登録
+5. SKE → 6. Doctor外部探索結果を取り込む

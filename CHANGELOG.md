@@ -1,9 +1,8 @@
 # CHANGELOG
 
-## v0.3.0
-- Added Search Audience driven External Discovery themes.
-- Added External Discovery Package generation for SIMS Doctor.
-- Added Doctor result import from full response or JSON.
-- Added SIMS_DOCTOR_EXTERNAL_DISCOVERY_RESULT_V1 contract.
-- Added Article Master cannibalization gate before external candidates enter Candidate Registry.
-- Added external discovery tracking sheet.
+## v0.3.1
+- Added SBM article-list compatible Article Master import.
+- ArticleID and SearchIntent are now optional for cannibalization checks.
+- Minimum Article Master fields are URL, title/H1, and main query.
+- Generates deterministic internal ArticleID when SBM ArticleID is unavailable.
+- Preserves related URL when external discovery candidate overlaps an existing article.
