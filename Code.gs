@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.1.1
+ * SIMS Keyword Explorer v0.1.2
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -15,7 +15,7 @@
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.1.1';
+const SKE_VERSION = '0.1.2';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -135,13 +135,86 @@ function skeSetupLight_() {
 
 function skeImportEvidencePrompt() {
   skeSetup_();
-  const ui = SpreadsheetApp.getUi();
-  const res = ui.prompt('対象ブログ / Evidenceを読み込む', 'SIMS Site Collectorが生成したEvidence ZIPのGoogle Drive URLまたはファイルIDを貼り付けてください。', ui.ButtonSet.OK_CANCEL);
-  if (res.getSelectedButton() !== ui.Button.OK) return;
-  const id = skeExtractDriveId_(res.getResponseText());
-  if (!id) throw new Error('Google DriveのファイルIDを判定できませんでした。');
-  const r = skeImportEvidenceById_(id);
-  ui.alert(`Evidenceを読み込みました。\n\nブログ：${r.siteName}\nファイル：${r.fileName}\nQuery行：${r.queryRows}\n\n次は「3. 新しいキーワード候補を探す」を実行してください。`);
+  const root=DriveApp.getRootFolder();
+  const html=HtmlService.createHtmlOutput(skeEvidencePickerHtml_({folderId:root.getId(),folderName:'マイドライブ'}))
+    .setWidth(700).setHeight(590);
+  SpreadsheetApp.getUi().showModalDialog(html,'Evidence Packageを選ぶ');
+}
+
+function skeListEvidencePickerFolder(folderId){
+  let folder;
+  try{folder=folderId?DriveApp.getFolderById(folderId):DriveApp.getRootFolder();}
+  catch(e){folder=DriveApp.getRootFolder();}
+  const folders=[],files=[];
+  let it=folder.getFolders(),n=0;
+  while(it.hasNext()&&n<150){const f=it.next();folders.push({id:f.getId(),name:f.getName()});n++;}
+  let fit=folder.getFiles(),m=0;
+  while(fit.hasNext()&&m<300){
+    const f=fit.next(),name=f.getName();
+    if(/\.zip$/i.test(name)&&(/SIMS/i.test(name)||/Evidence/i.test(name)))files.push({id:f.getId(),name:name,updated:f.getLastUpdated().toISOString()});
+    m++;
+  }
+  folders.sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+  files.sort((a,b)=>String(b.updated).localeCompare(String(a.updated)));
+  let parent=null;
+  try{const ps=folder.getParents();if(ps.hasNext()){const p=ps.next();parent={id:p.getId(),name:p.getName()||'マイドライブ'};}}catch(e){}
+  return {id:folder.getId(),name:folder.getName()||'マイドライブ',parent:parent,folders:folders,files:files};
+}
+
+function skeInspectEvidenceFile(fileId){
+  const file=DriveApp.getFileById(fileId);
+  if(!/\.zip$/i.test(file.getName()))throw new Error('ZIPファイルではありません。');
+  const blobs=Utilities.unzip(file.getBlob());
+  let manifest=null;
+  blobs.forEach(b=>{if(String(b.getName()||'').split('/').pop()==='manifest.json'){try{manifest=JSON.parse(b.getDataAsString('UTF-8'));}catch(e){}}});
+  const site=manifest&&manifest.site?manifest.site:{};
+  const period=manifest&&manifest.period?manifest.period:{};
+  return {
+    fileId:file.getId(),fileName:file.getName(),
+    siteName:String(site.siteName||site.site_name||''),
+    siteUrl:String(site.siteUrl||site.site_url||site.searchConsoleProperty||''),
+    generatedAt:String((manifest&&((manifest.generatedAt)||(manifest.generated_at)))||''),
+    periodLabel:period.days?String(period.days)+'日':(period.start&&period.end?period.start+' ～ '+period.end:''),
+    format:String((manifest&&manifest.format)||'')
+  };
+}
+
+function skeImportSelectedEvidence(payload){
+  const fileId=String(payload&&payload.fileId||'');
+  if(!fileId)throw new Error('Evidence Packageが選択されていません。');
+  const r=skeImportEvidenceById_(fileId);
+  return {ok:true,siteName:r.siteName,fileName:r.fileName,queryRows:r.queryRows,next:'次は「3. 新しいキーワード候補を探す」を実行してください。'};
+}
+
+function skeEvidencePickerHtml_(o){
+  const data=JSON.stringify(o||{}).replace(/</g,'\\u003c');
+  return `<!doctype html><html><head><base target="_top"><style>
+  body{font-family:Arial,"Noto Sans JP",sans-serif;margin:0;background:#f8fafd;color:#202124}.wrap{padding:20px}
+  .hero{background:#185abc;color:#fff;padding:16px 18px;border-radius:10px}.hero h2{margin:0 0 5px;font-size:20px}.hero p{margin:0;font-size:13px}
+  .card{background:#fff;border:1px solid #dadce0;border-radius:10px;margin-top:14px;padding:14px}.bar{display:flex;gap:8px;align-items:center}.where{flex:1;font-weight:bold;color:#174ea6}
+  button{border:1px solid #dadce0;background:#fff;border-radius:6px;padding:8px 12px;cursor:pointer}button.primary{background:#1a73e8;color:#fff;border-color:#1a73e8;font-weight:bold}
+  .list{height:235px;overflow:auto;border:1px solid #e0e0e0;border-radius:7px;margin-top:10px}.row{padding:9px 11px;border-bottom:1px solid #f1f3f4;cursor:pointer}.row:hover{background:#f8f9fa}.selected{background:#e8f0fe!important}
+  .meta{margin-top:12px;background:#f8fafd;border-radius:7px;padding:10px;line-height:1.7;font-size:13px}.hint{color:#5f6368;font-size:12px}.err{color:#b3261e;margin-top:8px}.actions{text-align:right;margin-top:12px}
+  </style></head><body><div class="wrap"><div class="hero"><h2>Evidence Packageを読み込む</h2><p>Collectorで作成したZIPを、Google Drive内のフォルダーを移動して選択します。</p></div>
+  <div class="card"><div class="bar"><button id="up">↑ 上へ</button><div id="where" class="where"></div></div><div id="list" class="list"></div><div class="hint">📁 フォルダーをクリックして移動し、📦 Evidence ZIPを選択してください。</div></div>
+  <div id="meta" class="meta">Evidence Packageを選択すると、サイト名・URL・作成日時・収集期間を確認できます。</div><div id="err" class="err"></div>
+  <div class="actions"><button onclick="google.script.host.close()">キャンセル</button> <button id="import" class="primary" disabled>このEvidenceを読み込む</button></div>
+  </div><script>
+  const init=${data};let current=null,selected=null;
+  const esc=s=>String(s||'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+  function fail(e){document.getElementById('err').textContent=e.message||e;}
+  function load(id){document.getElementById('list').innerHTML='<div class="row">読み込み中...</div>';google.script.run.withSuccessHandler(render).withFailureHandler(fail).skeListEvidencePickerFolder(id);}
+  function render(d){current=d;document.getElementById('where').textContent=d.name;document.getElementById('up').disabled=!d.parent;const box=document.getElementById('list');box.innerHTML='';
+    d.folders.forEach(f=>{const x=document.createElement('div');x.className='row';x.textContent='📁 '+f.name;x.onclick=()=>load(f.id);box.appendChild(x);});
+    d.files.forEach(f=>{const x=document.createElement('div');x.className='row';x.textContent='📦 '+f.name;x.onclick=()=>choose(f,x);box.appendChild(x);});
+    if(!d.folders.length&&!d.files.length)box.innerHTML='<div class="row">このフォルダーにEvidence ZIPはありません。</div>';
+  }
+  function choose(f,el){selected=f;document.querySelectorAll('.selected').forEach(x=>x.classList.remove('selected'));el.classList.add('selected');document.getElementById('import').disabled=true;
+    document.getElementById('meta').textContent='内容を確認しています...';google.script.run.withSuccessHandler(m=>{document.getElementById('meta').innerHTML='<b>'+esc(m.fileName)+'</b><br>サイト名：'+esc(m.siteName||'不明')+'<br>サイトURL：'+esc(m.siteUrl||'不明')+'<br>作成日時：'+esc(m.generatedAt||'不明')+'<br>収集期間：'+esc(m.periodLabel||'不明');document.getElementById('import').disabled=false;}).withFailureHandler(fail).skeInspectEvidenceFile(f.id);}
+  document.getElementById('up').onclick=()=>{if(current&&current.parent)load(current.parent.id)};
+  document.getElementById('import').onclick=()=>{if(!selected)return;const b=document.getElementById('import');b.disabled=true;b.textContent='読み込み中...';google.script.run.withSuccessHandler(r=>{document.getElementById('meta').innerHTML='<b style="color:#137333">読み込み完了</b><br>サイト：'+esc(r.siteName)+'<br>Query行：'+esc(r.queryRows)+'<br>'+esc(r.next);b.textContent='閉じる';b.disabled=false;b.onclick=()=>google.script.host.close();}).withFailureHandler(e=>{b.disabled=false;b.textContent='このEvidenceを読み込む';fail(e)}).skeImportSelectedEvidence({fileId:selected.id});};
+  load(init.folderId);
+  </script></body></html>`;
 }
 
 function skeImportEvidenceById_(fileId) {
@@ -254,7 +327,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.1',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.1.2',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
