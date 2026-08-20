@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.5.0
+ * SIMS Keyword Explorer v0.5.1
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -32,12 +32,17 @@
  * - Attach candidate context, Doctor decision, GSC evidence and Article Master
  * - Route "9. 処置を進める" automatically to Creator or Doctor by candidate state
  *
+ * v0.5.1:
+ * - Register published Creator articles back to Candidate Registry
+ * - Store published ArticleID / URL and change candidate status to PUBLISHED
+ * - Clear selection and refresh Home after publication registration
+ *
  * Not included:
  * - Direct web crawling from Apps Script
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.5.0';
+const SKE_VERSION = '0.5.1';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -92,6 +97,7 @@ function skeBuildMenu_() {
       .addItem('Article Masterの使い方', 'skeArticleMasterHelp')
       .addItem('選択候補のDoctor用ZIPを作る', 'skeGenerateDoctorPackageForSelected')
       .addItem('選択GREEN候補のCreator用ZIPを作る', 'skeGenerateCreatorPackageForSelected')
+      .addItem('Creator公開結果を登録', 'skeRegisterPublishedCreatorPrompt')
       .addItem('Homeを更新', 'skeRenderHome'))
     .addToUi();
 }
@@ -640,7 +646,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.5.0',
+    contract_version:'0.5.1',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -1356,6 +1362,106 @@ function skeExtractDoctorDiagnosisJson_(text){
 
 function skeOpenCandidates(){ const sh=skeSheet_(SKE_CONFIG.sheets.candidates); SpreadsheetApp.getActive().setActiveSheet(sh); }
 
+
+function skeRegisterPublishedCreatorPrompt(){
+  skeSetup_();
+  const rows=skeReadObjects_(SKE_CONFIG.sheets.candidates);
+  const selected=rows.filter(r=>r['選択']===true || String(r['選択']).toLowerCase()==='true');
+  const preferred=selected.find(r=>String(r['状態']||'')==='CREATOR_READY') ||
+                  rows.find(r=>String(r['状態']||'')==='CREATOR_READY') || {};
+  const candidateId=String(preferred['Candidate ID']||'');
+  const primaryQuery=String(preferred['Primary Query']||'');
+
+  const html=HtmlService.createHtmlOutput(`<!doctype html><html><head><base target="_top"><style>
+    body{font-family:Arial,"Noto Sans JP",sans-serif;background:#f8fafd;color:#202124;margin:0;padding:18px}
+    h2{margin:0 0 8px}.hint{font-size:13px;color:#5f6368;line-height:1.6;margin-bottom:14px}
+    label{display:block;font-weight:700;margin:12px 0 5px}
+    input{width:100%;box-sizing:border-box;border:1px solid #dadce0;border-radius:8px;padding:9px;font-size:13px}
+    .q{background:#eef3f8;border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:13px}
+    .actions{text-align:right;margin-top:16px}button{padding:8px 14px;border-radius:6px;border:1px solid #dadce0;background:#fff;cursor:pointer}
+    .primary{background:#1a73e8;color:#fff;border-color:#1a73e8}.err{color:#b3261e;margin-top:8px;white-space:pre-wrap}
+  </style></head><body>
+    <h2>Creator公開結果を登録</h2>
+    <div class="hint">Creatorで作成・公開した新記事をSKE候補へ紐づけ、状態をPUBLISHEDへ更新します。</div>
+    ${primaryQuery ? `<div class="q">候補：${skeHtml_(primaryQuery)}</div>` : ''}
+    <label>Candidate ID</label>
+    <input id="cid" value="${skeHtml_(candidateId)}" placeholder="SKE-20260820-XXXXXXXX">
+    <label>公開ArticleID</label>
+    <input id="aid" placeholder="A000430">
+    <label>公開URL</label>
+    <input id="url" placeholder="https://example.com/entry/...">
+    <div id="err" class="err"></div>
+    <div class="actions">
+      <button onclick="google.script.host.close()">キャンセル</button>
+      <button class="primary" onclick="go()">公開結果を登録</button>
+    </div>
+    <script>
+      function go(){
+        document.getElementById('err').textContent='';
+        google.script.run.withSuccessHandler(r=>{
+          alert('Creator公開結果を登録しました\\n\\nCandidate: '+r.candidateId+
+            '\\nArticleID: '+r.articleId+'\\n状態: '+r.status+'\\n公開URL: '+r.url);
+          google.script.host.close();
+        }).withFailureHandler(e=>{
+          document.getElementById('err').textContent=e.message||e;
+        }).skeRegisterPublishedCreator(
+          document.getElementById('cid').value,
+          document.getElementById('aid').value,
+          document.getElementById('url').value
+        );
+      }
+    </script></body></html>`).setWidth(650).setHeight(480);
+  SpreadsheetApp.getUi().showModalDialog(html,'Creator公開結果を登録');
+}
+
+function skeRegisterPublishedCreator(candidateId, articleId, publishedUrl){
+  candidateId=String(candidateId||'').trim();
+  articleId=String(articleId||'').trim();
+  publishedUrl=String(publishedUrl||'').trim();
+
+  if(!candidateId) throw new Error('Candidate IDを入力してください。');
+  if(!articleId) throw new Error('公開ArticleIDを入力してください。');
+  if(!/^A\d+$/i.test(articleId)) throw new Error('公開ArticleIDの形式を確認してください。例：A000430');
+  if(!/^https?:\/\/\S+$/i.test(publishedUrl)) throw new Error('公開URLを http:// または https:// から入力してください。');
+
+  const sh=skeSheet_(SKE_CONFIG.sheets.candidates);
+  const vals=sh.getDataRange().getValues();
+  if(vals.length<2) throw new Error('候補台帳がありません。');
+  const h=vals[0].map(String), ix={}; h.forEach((x,i)=>ix[x]=i);
+  const required=['Candidate ID','状態','公開ArticleID','公開URL','選択','更新日時'];
+  required.forEach(k=>{ if(ix[k]===undefined) throw new Error('候補台帳に必要列がありません: '+k); });
+
+  let rowIndex=-1;
+  for(let r=1;r<vals.length;r++){
+    if(String(vals[r][ix['Candidate ID']]||'').trim()===candidateId){ rowIndex=r; break; }
+  }
+  if(rowIndex<0) throw new Error('Candidate IDが候補台帳に見つかりません: '+candidateId);
+
+  const currentStatus=String(vals[rowIndex][ix['状態']]||'');
+  const verdict=ix['Doctor判定']!==undefined ? String(vals[rowIndex][ix['Doctor判定']]||'').toUpperCase() : '';
+  if(currentStatus==='PUBLISHED'){
+    const oldAid=String(vals[rowIndex][ix['公開ArticleID']]||'');
+    const oldUrl=String(vals[rowIndex][ix['公開URL']]||'');
+    if(oldAid===articleId && oldUrl===publishedUrl){
+      return {candidateId:candidateId,articleId:articleId,url:publishedUrl,status:'PUBLISHED',alreadyRegistered:true};
+    }
+    throw new Error('このCandidateはすでに公開済みです。既存のArticleID/URLを確認してください。');
+  }
+  if(currentStatus!=='CREATOR_READY' || verdict!=='GREEN'){
+    throw new Error('公開登録できるのはDoctor GREEN / CREATOR_READY候補です。現在: '+(verdict||'判定なし')+' / '+(currentStatus||'状態なし'));
+  }
+
+  const sheetRow=rowIndex+1;
+  sh.getRange(sheetRow,ix['公開ArticleID']+1).setValue(articleId);
+  sh.getRange(sheetRow,ix['公開URL']+1).setValue(publishedUrl);
+  sh.getRange(sheetRow,ix['状態']+1).setValue('PUBLISHED');
+  sh.getRange(sheetRow,ix['選択']+1).setValue(false);
+  sh.getRange(sheetRow,ix['更新日時']+1).setValue(new Date());
+
+  skeRenderHome();
+  return {candidateId:candidateId,articleId:articleId,url:publishedUrl,status:'PUBLISHED',alreadyRegistered:false};
+}
+
 function skeContinueWorkflow(){
   const rows=skeReadObjects_(SKE_CONFIG.sheets.candidates);
   const selected=rows.filter(r=>r['選択']===true || String(r['選択']).toLowerCase()==='true');
@@ -1428,7 +1534,7 @@ function skeGenerateCreatorPackageForSelected(){
 
     const referral={
       format:'SIMS_KEYWORD_EXPLORER_CREATOR_REFERRAL_V1',
-      contract_version:'0.5.0',
+      contract_version:'0.5.1',
       source:'SIMS_KEYWORD_EXPLORER',
       identity:{
         candidate_id:candidateId,
@@ -1560,7 +1666,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.5.0',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.5.1',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
