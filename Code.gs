@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.4.0
+ * SIMS Keyword Explorer v0.4.1
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -22,12 +22,17 @@
  * - Final Doctor diagnosis import for GREEN / YELLOW / BLOCK
  * - Article Master cannibalization gate before Candidate Registry (SBM-compatible)
  *
+ * v0.4.1:
+ * - Accept SIMS_DOCTOR_CASE_RESULT_V2 + SIMS_DOCTOR_CREATOR_SERP_RESULT_V1 final diagnosis
+ * - Fix Home "next action" workflow guidance
+ * - Exclude EARLY_OPPORTUNITY / non-DOCTOR_REVIEW rows from Doctor Package generation
+ *
  * Not included:
  * - Direct web crawling from Apps Script
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.4.0';
+const SKE_VERSION = '0.4.1';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -131,6 +136,7 @@ function skeRenderHome() {
   const siteUrl = skeGetSetting_('siteUrl') || '';
   const fileName = skeGetSetting_('evidenceFileName') || '未読込';
   const cand = skeReadObjects_(SKE_CONFIG.sheets.candidates);
+  const ext = skeReadObjects_(SKE_CONFIG.sheets.external);
   const count = k => cand.filter(r => String(r['状態']||'') === k).length;
   const rows = [
     ['SIMS Keyword Explorer', `v${SKE_VERSION}`],
@@ -139,19 +145,41 @@ function skeRenderHome() {
     ['Evidence', fileName],
     ['', ''],
     ['新規候補', count('DISCOVERED')],
-    ['Doctor診断候補', cand.filter(r=>String(r['Engine判定']||'')==='DOCTOR_REVIEW').length],
+    ['Doctor診断候補', cand.filter(r=>String(r['Engine判定']||'')==='DOCTOR_REVIEW' && String(r['状態']||'')==='DISCOVERED').length],
     ['Creator紹介可能', count('CREATOR_READY')],
     ['再確認待ち', count('EARLY_OPPORTUNITY')],
     ['既存記事改善候補', count('WRITER_REDIRECT')],
     ['公開済み', count('PUBLISHED')],
-    ['外部探索テーマ', skeReadObjects_(SKE_CONFIG.sheets.external).filter(r=>String(r['状態']||'')!=='').length],
+    ['外部探索テーマ', ext.filter(r=>String(r['状態']||'')!=='').length],
     ['', ''],
-    ['次の操作', siteName==='未選択' ? '2. Evidenceを読み込む' : '3. 検索オーディエンスを分析する']
+    ['次の操作', skeNextHomeAction_(siteName,fileName,cand,ext)]
   ];
   sh.getRange(1,1,rows.length,2).setValues(rows);
   sh.getRange('A1:B1').setFontWeight('bold').setFontSize(16);
   sh.getRange('A2:A14').setFontWeight('bold');
   sh.setColumnWidth(1,180); sh.setColumnWidth(2,520);
+}
+
+function skeNextHomeAction_(siteName,fileName,cand,ext){
+  if(siteName==='未選択' || !fileName || fileName==='未読込') return '2. Evidenceを読み込む';
+
+  const personaGroups=Number(skeGetSetting_('audienceProfileGroups')||0);
+  if(personaGroups<=0) return '3. 検索オーディエンスを分析する';
+
+  if(!ext.length) return '4. 外部探索テーマを作る';
+
+  const packageReady=ext.some(r=>String(r['状態']||'')==='READY' && (r['選択']===true || String(r['選択']).toLowerCase()==='true'));
+  if(packageReady) return '5. 外部探索Packageを作る';
+
+  const packageCreated=ext.some(r=>String(r['状態']||'')==='PACKAGE_CREATED');
+  if(packageCreated) return '6. Doctor外部探索結果を取り込む';
+
+  const doctorPending=(cand||[]).some(r=>String(r['Engine判定']||'')==='DOCTOR_REVIEW' && String(r['状態']||'')==='DISCOVERED');
+  const creatorReady=(cand||[]).some(r=>String(r['状態']||'')==='CREATOR_READY');
+  const early=(cand||[]).some(r=>String(r['状態']||'')==='EARLY_OPPORTUNITY');
+  if(doctorPending || creatorReady || early) return '8. 候補を確認する';
+
+  return '4. 外部探索テーマを作る';
 }
 
 function skeSetupLight_() {
@@ -606,7 +634,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.4.0',
+    contract_version:'0.4.1',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -1117,10 +1145,14 @@ function skeImportDoctorDiagnosis(text){
   if(!obj) throw new Error('Doctor最終診断のJSONを読み取れませんでした。回答全文またはJSONを貼り付けてください。');
 
   const fmt=String(obj.format||'');
-  if(fmt!=='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1'){
+  const contract=String(obj.contract_name||'');
+  const acceptedLegacy=fmt==='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1';
+  const acceptedCaseV2=fmt==='SIMS_DOCTOR_CASE_RESULT_V2' && contract==='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1';
+  if(!acceptedLegacy && !acceptedCaseV2){
     throw new Error(
-      'Doctor診断結果のformatが一致しません: '+(fmt||'未指定')+
-      '\\n外部探索結果ではなく、GREEN / YELLOW / BLOCK の最終診断を貼り付けてください。'
+      'Doctor診断結果の契約が一致しません: format='+(fmt||'未指定')+
+      ' / contract_name='+(contract||'未指定')+
+      '\\nGREEN / YELLOW / BLOCK のCreator向け最終診断を貼り付けてください。'
     );
   }
 
@@ -1134,6 +1166,7 @@ function skeImportDoctorDiagnosis(text){
 
   const diagnosis=obj.diagnosis||{};
   const decision=String(
+    diagnosis.verdict ||
     diagnosis.decision ||
     obj.verdict ||
     obj.decision ||
@@ -1164,6 +1197,7 @@ function skeImportDoctorDiagnosis(text){
   if(!recheckDate){
     const days=Number(
       (obj.review_schedule&&obj.review_schedule.review_after_days) ||
+      obj.review_after_days ||
       presentation.review_after_days ||
       0
     );
@@ -1261,9 +1295,17 @@ function skeExtractDoctorDiagnosisJson_(text){
   let s=String(text||'').trim();
   if(!s)return null;
 
+  const isAccepted=o=>{
+    if(!o)return false;
+    const fmt=String(o.format||'');
+    const contract=String(o.contract_name||'');
+    return fmt==='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1' ||
+      (fmt==='SIMS_DOCTOR_CASE_RESULT_V2' && contract==='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1');
+  };
+
   try{
     const o=JSON.parse(s);
-    if(o&&o.format==='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1')return o;
+    if(isAccepted(o))return o;
   }catch(e){}
 
   const fences=s.match(/```(?:json)?\s*([\s\S]*?)```/ig)||[];
@@ -1271,7 +1313,7 @@ function skeExtractDoctorDiagnosisJson_(text){
     const body=fences[i].replace(/^```(?:json)?\s*/i,'').replace(/```$/,'').trim();
     try{
       const o=JSON.parse(body);
-      if(o&&o.format==='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1')return o;
+      if(isAccepted(o))return o;
     }catch(e){}
   }
 
@@ -1294,7 +1336,7 @@ function skeExtractDoctorDiagnosisJson_(text){
             if(depth===0){
               try{
                 const o=JSON.parse(s.slice(start,i+1));
-                if(o&&o.format==='SIMS_DOCTOR_CREATOR_SERP_RESULT_V1')return o;
+                if(isAccepted(o))return o;
               }catch(e){}
               break;
             }
@@ -1316,7 +1358,7 @@ function skeContinueWorkflow(){
     if(creatorReady.length){
       SpreadsheetApp.getUi().alert(
         `Creator紹介可能なGREEN候補が${creatorReady.length}件あります。\n`+
-        '現行v0.4.0ではCreator Package自動生成は未実装です。候補行を保持したまま、次の実装対象とします。'
+        '現行v0.4.1ではCreator Package自動生成は未実装です。候補行を保持したまま、次の実装対象とします。'
       );
       return;
     }
@@ -1340,15 +1382,45 @@ function skeGenerateDoctorPackageForSelected(){
   const sh=skeSheet_(SKE_CONFIG.sheets.candidates), vals=sh.getDataRange().getValues();
   if(vals.length<2) throw new Error('候補がありません。');
   const h=vals[0].map(String), ix={};h.forEach((x,i)=>ix[x]=i);
+
+  const selected=[];
   const targets=[];
-  for(let r=1;r<vals.length;r++) if(vals[r][ix['選択']]===true) targets.push({row:r+1,values:vals[r]});
-  if(!targets.length) throw new Error('Doctorへ送る候補の「選択」にチェックを入れてください。');
+  const skipped=[];
+  for(let r=1;r<vals.length;r++){
+    if(vals[r][ix['選択']]!==true) continue;
+    const status=String(vals[r][ix['状態']]||'');
+    const engine=String(vals[r][ix['Engine判定']]||'');
+    const item={row:r+1,values:vals[r]};
+    selected.push(item);
+
+    if(status==='DISCOVERED' && engine==='DOCTOR_REVIEW'){
+      targets.push(item);
+    }else{
+      skipped.push({
+        candidateId:String(vals[r][ix['Candidate ID']]||''),
+        primaryQuery:String(vals[r][ix['Primary Query']]||''),
+        status:status,
+        engine:engine
+      });
+    }
+  }
+
+  if(!selected.length) throw new Error('Doctorへ送る候補の「選択」にチェックを入れてください。');
   if(targets.length>3) throw new Error('1回にDoctorへ送れる候補は最大3件です。');
+  if(!targets.length){
+    const detail=skipped.map(x=>`${x.primaryQuery || x.candidateId}（${x.status || '状態不明'}）`).join('\n');
+    throw new Error(
+      '選択した候補にDoctor診断対象がありません。\n'+
+      'Doctor用Packageを作れるのは「DISCOVERED / DOCTOR_REVIEW」の候補だけです。\n\n'+
+      (detail ? '除外対象:\n'+detail : '')
+    );
+  }
+
   const folder=DriveApp.getRootFolder(); const created=[];
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.4.0',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.4.1',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -1368,8 +1440,14 @@ function skeGenerateDoctorPackageForSelected(){
     const fn=skePackageFileName_(String(get('ブログ')),'Doctor用',String(get('Candidate ID')));
     const f=folder.createFile(Utilities.zip(files,fn)); created.push({name:fn,url:f.getUrl()});
   });
+
   const msg=created.map(x=>`ファイル：${x.name}\n用途：SIMS Doctorへ渡してください\n保存先：マイドライブ`).join('\n\n');
-  SpreadsheetApp.getUi().alert(`Doctor用Packageを作成しました。\n\n${msg}\n\n次の操作：生成したZIPをSIMS Doctorへ渡してください。`);
+  const skippedMsg=skipped.length
+    ? `\n\n除外：${skipped.length}件（再確認待ち・Creator紹介可能など、Doctor再診対象ではない候補）`
+    : '';
+  SpreadsheetApp.getUi().alert(
+    `Doctor用Packageを作成しました。\n\n${msg}${skippedMsg}\n\n次の操作：生成したZIPをSIMS Doctorへ渡してください。`
+  );
 }
 
 function skeCandidateEvidenceCsv_(query){
