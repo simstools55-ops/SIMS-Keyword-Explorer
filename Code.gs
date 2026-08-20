@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.5.1
+ * SIMS Keyword Explorer v0.5.2
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -37,12 +37,15 @@
  * - Store published ArticleID / URL and change candidate status to PUBLISHED
  * - Clear selection and refresh Home after publication registration
  *
+ * v0.5.2:
+ * - Fix Creator publication dialog ReferenceError caused by missing HTML escape helper
+ *
  * Not included:
  * - Direct web crawling from Apps Script
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.5.1';
+const SKE_VERSION = '0.5.2';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -646,7 +649,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.5.1',
+    contract_version:'0.5.2',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -1534,7 +1537,7 @@ function skeGenerateCreatorPackageForSelected(){
 
     const referral={
       format:'SIMS_KEYWORD_EXPLORER_CREATOR_REFERRAL_V1',
-      contract_version:'0.5.1',
+      contract_version:'0.5.2',
       source:'SIMS_KEYWORD_EXPLORER',
       identity:{
         candidate_id:candidateId,
@@ -1666,7 +1669,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.5.1',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.5.2',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
@@ -1886,6 +1889,15 @@ function skeFormatCandidates_(){
     const col=header.indexOf(name)+1;
     if(col>0) sh.hideColumns(col);
   });
+}
+
+function skeHtml_(s){
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
 }
 
 function skeNormalizeQuery_(q){
