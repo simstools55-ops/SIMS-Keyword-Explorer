@@ -1,5 +1,10 @@
 # CHANGELOG
 
-## v0.3.4
-- Clear related ArticleID/URL when no strong existing owner exists.
-- Rename Doctor import result label from "既存更新" to "候補台帳更新".
+## v0.4.0
+- Added dedicated final Doctor diagnosis importer.
+- Added SIMS_DOCTOR_CREATOR_SERP_RESULT_V1 support.
+- Added GREEN -> CREATOR_READY.
+- Added YELLOW -> EARLY_OPPORTUNITY + recheck date.
+- Added BLOCK -> BLOCKED / WRITER_REDIRECT.
+- Separated external discovery result import from final diagnosis import.
+- Added Creator-ready count to Home.
