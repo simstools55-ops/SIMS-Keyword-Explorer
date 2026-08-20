@@ -1,19 +1,28 @@
-# SIMS Keyword Explorer v0.4.1
+# SIMS Keyword Explorer v0.5.0
 
-## 更新内容
+## 新機能
+- GREEN / CREATOR_READY候補からCreator用ZIPを自動生成
+- 「9. 処置を進める」で候補状態に応じてDoctor用/Creator用Packageへ自動ルーティング
+- Creator Packageに以下を同梱
+  - creator_referral.json
+  - candidate_evidence.csv
+  - article_master.csv
+  - README-FIRST.md
 
-- Doctor最終診断の `SIMS_DOCTOR_CASE_RESULT_V2` + `SIMS_DOCTOR_CREATOR_SERP_RESULT_V1` 契約を受理できるよう修正
-- Doctor判定を `diagnosis.verdict` からも取得できるよう修正
-- Homeの「次の操作」を処理状況に応じて判定するよう修正
-- `EARLY_OPPORTUNITY` などDoctor再診対象ではない候補をDoctor Package生成から除外
-- Package内 `contract_version` と画面上の製品バージョンを v0.4.1 に統一
+## Creator Packageの役割
+DoctorがGREENと確定した新記事候補を、SIMS Article Creatorへ正式に引き継ぎます。
+SKE Candidate IDを保持し、公開後のSKE登録・SBMモニターへ追跡可能にします。
 
-## 入れ替え対象
+## Apps Scriptで変更するファイル
+- Code.gs : 置換
+- その他 : 変更なし
 
-- `Code.gs` : 置換
-
-その他のApps Scriptファイルは変更不要です。
+## 実運用再開
+1. Code.gsをv0.5.0へ置換して保存
+2. スプレッドシートを再読み込み
+3. `SKE-20260820-2DC528CF`（line メッセージ編集 いつから）だけを選択
+4. 「9. 処置を進める」
+5. 生成されたCreator用ZIPをSIMS Article Creatorへ渡す
 
 ## 推奨コミットメッセージ
-
-`fix: release SIMS Keyword Explorer v0.4.1 doctor import and workflow routing`
+feat: release SKE v0.5.0 Creator referral package workflow

@@ -1,5 +1,5 @@
 /**
- * SIMS Keyword Explorer v0.4.1
+ * SIMS Keyword Explorer v0.5.0
  * P1 prototype: Internal Discovery from SIMS Site Collector Evidence.
  *
  * Scope:
@@ -27,12 +27,17 @@
  * - Fix Home "next action" workflow guidance
  * - Exclude EARLY_OPPORTUNITY / non-DOCTOR_REVIEW rows from Doctor Package generation
  *
+ * v0.5.0:
+ * - Generate Creator referral ZIPs for selected GREEN / CREATOR_READY candidates
+ * - Attach candidate context, Doctor decision, GSC evidence and Article Master
+ * - Route "9. 処置を進める" automatically to Creator or Doctor by candidate state
+ *
  * Not included:
  * - Direct web crawling from Apps Script
  * - Automatic Creator execution
  */
 
-const SKE_VERSION = '0.4.1';
+const SKE_VERSION = '0.5.0';
 const SKE_PRODUCT_NAME = 'SIMS Keyword Explorer';
 const SKE_CONFIG = {
   sheets: {
@@ -86,6 +91,7 @@ function skeBuildMenu_() {
       .addItem('SBM記事一覧からArticle Masterを取り込む', 'skeImportArticleMasterFromSbmPrompt')
       .addItem('Article Masterの使い方', 'skeArticleMasterHelp')
       .addItem('選択候補のDoctor用ZIPを作る', 'skeGenerateDoctorPackageForSelected')
+      .addItem('選択GREEN候補のCreator用ZIPを作る', 'skeGenerateCreatorPackageForSelected')
       .addItem('Homeを更新', 'skeRenderHome'))
     .addToUi();
 }
@@ -634,7 +640,7 @@ function skeGenerateExternalDiscoveryPackage(){
 
   const request={
     format:'SIMS_KEYWORD_EXPLORER_EXTERNAL_DISCOVERY_REQUEST_V1',
-    contract_version:'0.4.1',
+    contract_version:'0.5.0',
     package_id:packageId,
     site:{
       site_id:siteId,
@@ -1356,10 +1362,7 @@ function skeContinueWorkflow(){
   if(selected.length){
     const creatorReady=selected.filter(r=>String(r['状態']||'')==='CREATOR_READY');
     if(creatorReady.length){
-      SpreadsheetApp.getUi().alert(
-        `Creator紹介可能なGREEN候補が${creatorReady.length}件あります。\n`+
-        '現行v0.4.1ではCreator Package自動生成は未実装です。候補行を保持したまま、次の実装対象とします。'
-      );
+      skeGenerateCreatorPackageForSelected();
       return;
     }
     skeGenerateDoctorPackageForSelected();
@@ -1376,6 +1379,143 @@ function skeContinueWorkflow(){
     return;
   }
   SpreadsheetApp.getUi().alert('現在、選択中の候補や再確認待ち候補はありません。');
+}
+
+
+function skeGenerateCreatorPackageForSelected(){
+  const sh=skeSheet_(SKE_CONFIG.sheets.candidates), vals=sh.getDataRange().getValues();
+  if(vals.length<2) throw new Error('候補がありません。');
+  const h=vals[0].map(String), ix={}; h.forEach((x,i)=>ix[x]=i);
+
+  const selected=[], targets=[], skipped=[];
+  for(let r=1;r<vals.length;r++){
+    if(vals[r][ix['選択']]!==true) continue;
+    const status=String(vals[r][ix['状態']]||'');
+    const verdict=String(vals[r][ix['Doctor判定']]||'').toUpperCase();
+    const item={row:r+1,values:vals[r]};
+    selected.push(item);
+    if(status==='CREATOR_READY' && verdict==='GREEN') targets.push(item);
+    else skipped.push({
+      candidateId:String(vals[r][ix['Candidate ID']]||''),
+      primaryQuery:String(vals[r][ix['Primary Query']]||''),
+      status:status,
+      verdict:verdict
+    });
+  }
+
+  if(!selected.length) throw new Error('Creatorへ送る候補の「選択」にチェックを入れてください。');
+  if(targets.length>3) throw new Error('1回にCreatorへ送れる候補は最大3件です。');
+  if(!targets.length){
+    const detail=skipped.map(x=>`${x.primaryQuery || x.candidateId}（${x.verdict || 'Doctor判定なし'} / ${x.status || '状態不明'}）`).join('\n');
+    throw new Error(
+      '選択した候補にCreator紹介対象がありません。\n'+
+      'Creator用Packageを作れるのは「GREEN / CREATOR_READY」の候補だけです。\n\n'+
+      (detail ? '除外対象:\n'+detail : '')
+    );
+  }
+
+  const folder=DriveApp.getRootFolder();
+  const articleRows=skeReadObjects_(SKE_CONFIG.sheets.articleMaster);
+  const articleHeaders=articleRows.length ? Object.keys(articleRows[0]) : [];
+  const articleCsv=[articleHeaders].concat(articleRows.map(o=>articleHeaders.map(k=>o[k])))
+    .map(row=>row.map(skeCsvCell_).join(',')).join('\r\n');
+
+  const created=[];
+  targets.forEach(t=>{
+    const row=t.values, get=n=>row[ix[n]];
+    const primaryQuery=String(get('Primary Query')||'');
+    const candidateId=String(get('Candidate ID')||'');
+
+    const referral={
+      format:'SIMS_KEYWORD_EXPLORER_CREATOR_REFERRAL_V1',
+      contract_version:'0.5.0',
+      source:'SIMS_KEYWORD_EXPLORER',
+      identity:{
+        candidate_id:candidateId,
+        site_id:String(get('SiteID')||''),
+        site_name:String(get('ブログ')||''),
+        site_url:String(skeGetSetting_('siteUrl')||'')
+      },
+      assignment:{
+        route_to:'CREATOR',
+        action:'CREATE_NEW_ARTICLE',
+        primary_query:primaryQuery,
+        discovery_type:String(get('Discovery Type')||''),
+        p1_score:Number(get('P1 Score')||0),
+        demand_maturity:String(get('需要成熟度')||''),
+        article_lifespan:String(get('記事寿命')||'')
+      },
+      doctor_final:{
+        verdict:String(get('Doctor判定')||''),
+        confidence:Number(get('Doctor確信度')||0),
+        next_review_date:String(get('次回確認日')||''),
+        decision_context:String(get('発見理由')||'')
+      },
+      existing_article_check:{
+        status:String(get('既存記事判定')||''),
+        related_article_id:String(get('関連ArticleID')||''),
+        related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)
+      },
+      gsc_evidence:{
+        impressions:Number(get('表示回数')||0),
+        clicks:Number(get('クリック')||0),
+        average_position:Number(get('平均順位')||0),
+        url_count:Number(get('URL数')||0)
+      },
+      creator_instructions:[
+        'DoctorのGREEN判定を前提に、新規記事として完成原稿を作成する',
+        '現在のWeb/SERPと公式情報を再確認し、公開時点で古い情報を残さない',
+        'Doctorのdecision_contextにある差別化条件・禁止事項・更新条件を守る',
+        'Article Masterを参照し、既存記事とのカニバリを避け、自然な内部リンク候補を選ぶ',
+        'SEOタイトル、meta description、本文、FAQ、内部リンク案を含む公開可能な完成稿を返す',
+        'SKE Candidate IDを成果物に保持し、公開後のSKE/SBM登録で追跡できるようにする'
+      ],
+      requested_output:{
+        candidate_id:candidateId,
+        publish_readiness:'PUBLICATION_READY_OR_NEEDS_USER_DECISION',
+        article_title:'required',
+        seo_title:'required',
+        meta_description:'required',
+        article_body:'required',
+        internal_links:'recommended',
+        notes_for_publication:'required'
+      }
+    };
+
+    const evidenceCsv=skeCandidateEvidenceCsv_(primaryQuery);
+    const readme=[
+      'SIMS Keyword Explorer Creator Package',
+      '',
+      `SKE Version: ${SKE_VERSION}`,
+      `Candidate: ${candidateId}`,
+      `Site: ${get('ブログ')}`,
+      `Primary Query: ${primaryQuery}`,
+      `Doctor: ${get('Doctor判定')} / confidence ${get('Doctor確信度')}`,
+      '',
+      'このZIPをSIMS Article Creatorへ渡してください。',
+      'Creatorは creator_referral.json を主契約として読み、candidate_evidence.csv と article_master.csv を補助Evidenceとして使用してください。',
+      '新規記事を公開可能な完成稿として作成し、SKE Candidate IDを回答内に保持してください。',
+      '公開後はSKEへ公開URL/ArticleIDを登録し、その後SBMで新記事モニターへ引き継ぎます。'
+    ].join('\n');
+
+    const files=[
+      Utilities.newBlob(JSON.stringify(referral,null,2),'application/json','creator_referral.json'),
+      Utilities.newBlob(evidenceCsv,'text/csv','candidate_evidence.csv'),
+      Utilities.newBlob(articleCsv,'text/csv','article_master.csv'),
+      Utilities.newBlob(readme,'text/plain','README-FIRST.md')
+    ];
+    const fn=skePackageFileName_(String(get('ブログ')),'Creator用',candidateId);
+    const f=folder.createFile(Utilities.zip(files,fn));
+    created.push({name:fn,url:f.getUrl(),candidateId:candidateId});
+  });
+
+  const msg=created.map(x=>`ファイル：${x.name}\nCandidate：${x.candidateId}\n用途：SIMS Article Creatorへ渡してください\n保存先：マイドライブ`).join('\n\n');
+  const skippedMsg=skipped.length
+    ? `\n\n除外：${skipped.length}件（GREEN / CREATOR_READY以外）`
+    : '';
+  SpreadsheetApp.getUi().alert(
+    `Creator用Packageを作成しました。\n\n${msg}${skippedMsg}\n\n次の操作：生成したZIPをSIMS Article Creatorへ渡してください。`
+  );
 }
 
 function skeGenerateDoctorPackageForSelected(){
@@ -1420,7 +1560,7 @@ function skeGenerateDoctorPackageForSelected(){
   targets.forEach(t=>{
     const row=t.values, get=n=>row[ix[n]];
     const candidate={
-      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.4.1',
+      format:'SIMS_KEYWORD_EXPLORER_DOCTOR_REFERRAL_V1', contract_version:'0.5.0',
       identity:{candidate_id:String(get('Candidate ID')),site_id:String(get('SiteID')),site_name:String(get('ブログ'))},
       discovery:{type:String(get('Discovery Type')),primary_query:String(get('Primary Query')),demand_maturity:String(get('需要成熟度')),article_lifespan:String(get('記事寿命')),p1_score:Number(get('P1 Score')||0)},
       existing_article_check:{status:String(get('既存記事判定')),related_article_id:String(get('関連ArticleID')||''),related_urls:String(get('関連URL')||'').split(/\n+/).filter(Boolean)},
